@@ -1,30 +1,31 @@
 """Write source files for one company and one environment.
-
+ 
   python -m simulator.run --company bhg --env dev --out ./out          # local folder (test)
   python -m simulator.run --company bhg --env test --s3                 # S3 (GitHub Actions)
-
+ 
 Without --upto it writes everything still missing up to yesterday (IST):
 first run = full load (monthly files up to 4 Oct 2026) + catch-up daily files; later runs = new days.
-The last written business date is kept in landing/_sim/last_date.txt.
+The last written business date is kept as an empty marker object under landing/_sim/state/
+(the simulator key may only Put and List under landing/, never Get).
 """
 import argparse, calendar, csv, io, os, random
 from datetime import date, datetime, timedelta, timezone
-
+ 
 from simulator import mess
 from simulator.world import (World, COLUMNS, NEW_COLUMNS, TABLES, CUTOVER, NEW_COL_DATE,
                              BHG_START, FQF_START, source_of)
-
+ 
 IST = timezone(timedelta(hours=5, minutes=30))
-STATE_KEY = "landing/_sim/last_date.txt"
-
-
+STATE_PREFIX = "landing/_sim/state/"   # empty marker objects: landing/_sim/state/<yyyy-mm-dd>
+ 
+ 
 class Sink:
     def __init__(self, out=None, bucket=None):
         self.out, self.bucket, self.s3 = out, bucket, None
         if bucket:
             import boto3
             self.s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
-
+ 
     def put(self, key, body):
         if self.s3:
             self.s3.put_object(Bucket=self.bucket, Key=key, Body=body.encode("utf-8"))
@@ -33,17 +34,17 @@ class Sink:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(body)
-
-    def get(self, key):
-        try:
-            if self.s3:
-                return self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].read().decode()
-            with open(os.path.join(self.out, key), encoding="utf-8") as f:
-                return f.read()
-        except Exception:
-            return None
-
-
+ 
+    def last_date(self):
+        if self.s3:
+            resp = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=STATE_PREFIX)
+            names = [o["Key"][len(STATE_PREFIX):] for o in resp.get("Contents", [])]
+        else:
+            path = os.path.join(self.out, STATE_PREFIX)
+            names = os.listdir(path) if os.path.isdir(path) else []
+        return max((date.fromisoformat(n) for n in names), default=None)
+ 
+ 
 def to_csv(table, rows, file_date, delimiter=","):
     cols = list(COLUMNS[table])
     if table in NEW_COLUMNS and file_date >= NEW_COL_DATE:
@@ -55,13 +56,13 @@ def to_csv(table, rows, file_date, delimiter=","):
     for row in rows:
         w.writerow({c: row.get(c, "") for c in cols})
     return buf.getvalue()
-
-
+ 
+ 
 def key_for(table, file_date, nn):
     ymd = file_date.strftime("%Y%m%d")
     return f"landing/{source_of(table)}/{table}/{file_date:%Y/%m}/{table}_{ymd}_{nn:02d}.csv"
-
-
+ 
+ 
 def incidents(env, company, d):
     """test/prod only: per month one unreadable file + one duplicate re-send; per quarter one delayed day."""
     if env == "dev":
@@ -76,8 +77,8 @@ def incidents(env, company, d):
     if d.day == dup_day:
         out["duplicate"] = dup_t
     return out
-
-
+ 
+ 
 def delayed_day(env, company, d):
     if env == "dev":
         return False
@@ -85,8 +86,8 @@ def delayed_day(env, company, d):
     r = random.Random(f"delay-{env}-{company}-{d.year}-{q}")
     start = date(d.year, q * 3 + 1, 1)
     return d == start + timedelta(days=r.randint(5, 80))
-
-
+ 
+ 
 def write_full_load(world, company, env, sink):
     first = BHG_START if company == "bhg" else FQF_START
     count = 0
@@ -103,8 +104,8 @@ def write_full_load(world, company, env, sink):
             count += 1
             y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return count
-
-
+ 
+ 
 def write_day(world, company, env, d, sink):
     inc = incidents(env, company, d)
     count = 0
@@ -123,8 +124,8 @@ def write_day(world, company, env, d, sink):
             sink.put(key_for(table, d, 1), body)
             count += 1
     return count
-
-
+ 
+ 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--company", required=True, choices=["bhg", "fqf"])
@@ -133,20 +134,19 @@ def main():
     ap.add_argument("--s3", action="store_true", help="write to S3_BUCKET")
     ap.add_argument("--upto", help="last business date to write (yyyy-mm-dd); default = yesterday IST")
     a = ap.parse_args()
-
+ 
     sink = Sink(out=a.out, bucket=os.environ["S3_BUCKET"] if a.s3 else None)
     yesterday = (datetime.now(IST) - timedelta(days=1)).date()
     upto = date.fromisoformat(a.upto) if a.upto else yesterday
-    state = sink.get(STATE_KEY)
-    last = date.fromisoformat(state.strip()) if state else None
-
+    last = sink.last_date()
+ 
     if last and last >= upto:
         print(f"{a.company}/{a.env}: nothing to do (last={last}, upto={upto})")
         return
     if delayed_day(a.env, a.company, upto) and upto > CUTOVER:
         upto -= timedelta(days=1)                       # planned missing day: sent with the next run
         print(f"{a.company}/{a.env}: planned delay, holding {upto + timedelta(days=1)}")
-
+ 
     world = World(a.env, upto).build()
     files = 0
     if last is None:
@@ -158,9 +158,10 @@ def main():
         files += write_day(world, a.company, a.env, d, sink)
         d += timedelta(days=1)
     if upto >= CUTOVER:
-        sink.put(STATE_KEY, str(upto))
+        sink.put(STATE_PREFIX + str(upto), "")
     print(f"{a.company}/{a.env}: done, {files} files, last business date {upto}")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
+ 
