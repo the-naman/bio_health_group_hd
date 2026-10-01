@@ -1,0 +1,9 @@
+env: dev
+catalog: bhg_dev
+bucket: lh-bhg-dev-source
+scale: 0.10
+schedule: on_demand
+late_days: 7
+orphan_retry_days: 7
+refresh_in: true
+refresh_out: false
