@@ -1,0 +1,9 @@
+env: prod
+catalog: bhg_prod
+bucket: lh-bhg-prod-source
+scale: 1.00
+schedule: "30 0 * * *"   # 00:30 IST
+late_days: 7
+orphan_retry_days: 7
+refresh_in: false
+refresh_out: true
