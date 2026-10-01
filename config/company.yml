@@ -1,0 +1,9 @@
+code: bhg
+name: Bio Health Group
+role: parent
+history_start: 2025-04-05
+full_load_end: 2026-10-04
+daily_start: 2026-10-05
+new_column_date: 2026-10-15
+timezone: Asia/Kolkata
+cities: [Bengaluru, Mumbai, Delhi, Chennai, Hyderabad]
