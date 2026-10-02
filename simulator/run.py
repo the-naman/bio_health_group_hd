@@ -5,7 +5,8 @@
  
 Without --upto it writes everything still missing up to yesterday (IST):
 first run = full load (monthly files up to 4 Oct 2026, even if run earlier) + catch-up daily files;
-later runs = new days only. A file name is never written twice.
+later runs = new days only. A file name is never written twice. An empty (0 byte) file is never sent
+(Spark does not list empty files, so bronze could never file one away).
 The last written business date is kept as an empty marker object under landing/_sim/state/
 (the simulator key may only Put and List under landing/, never Get).
 """
@@ -89,8 +90,12 @@ def write_full_load(world, company, env, sink):
         while (y, m) <= (CUTOVER.year, CUTOVER.month):
             fd = min(date(y, m, calendar.monthrange(y, m)[1]), CUTOVER)
             rows = mess.apply(env, table, fd, by_month.get((y, m), []))
-            if rows or table not in BINARY:                 # a document is sent only when it has lines
-                sink.put(key_for(table, fd, 1), render(env, table, rows, fd))
+            if not rows and table in BINARY:                # a document is sent only when it has lines
+                body = ""
+            else:
+                body = render(env, table, rows, fd)
+            if body:                                        # an empty (0 byte) file is never sent
+                sink.put(key_for(table, fd, 1), body)
                 count += 1
             y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return count
@@ -104,6 +109,8 @@ def write_day(world, company, env, d, sink):
         if not rows and table in BINARY:                    # a document is sent only when it has lines
             continue
         body = render(env, table, rows, d)
+        if not body:                                        # an empty (0 byte) file is never sent
+            continue
         if inc.get("unreadable") == table:
             sink.put(key_for(table, d, 1), render(env, table, rows, d, broken=True))  # broken file
             sink.put(key_for(table, d, 2), body)                                  # corrected re-send
