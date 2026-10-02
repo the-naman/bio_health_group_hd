@@ -1,31 +1,28 @@
 name: simulator
 
 on:
-  # Nightly 00:30 IST for test + prod. Switched on at go-live (step 5.13):
-  # schedule:
-  #   - cron: "0 19 * * *"
   workflow_dispatch:
     inputs:
       env:
-        description: "Environment"
+        description: Environment to write source files for
+        required: true
+        default: dev
         type: choice
         options: [dev, test, prod]
-        default: dev
+  # Nightly run for test and prod. Switched on at go-live (step 5.13).
+  # schedule:
+  #   - cron: "0 19 * * *"   # 00:30 IST
 
 permissions:
   contents: read
-
-concurrency:
-  group: simulator-${{ github.event_name }}-${{ inputs.env || 'nightly' }}
-  cancel-in-progress: false
 
 jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
-      envs: ${{ steps.p.outputs.envs }}
+      envs: ${{ steps.pick.outputs.envs }}
     steps:
-      - id: p
+      - id: pick
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo 'envs=["test","prod"]' >> "$GITHUB_OUTPUT"
@@ -35,12 +32,17 @@ jobs:
 
   simulate:
     needs: plan
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        env: ${{ fromJson(needs.plan.outputs.envs) }}
-    runs-on: ubuntu-latest
+        env: ${{ fromJSON(needs.plan.outputs.envs) }}
     environment: ${{ matrix.env == 'dev' && 'bhg_dev' || format('bhg_sim_{0}', matrix.env) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_SIM_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SIM_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,11 +50,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install --quiet boto3
-      - name: Write source files to S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_SIM_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SIM_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      - name: Install libraries
+        run: pip install boto3 pillow
+      - name: Write source files
         run: python -m simulator.run --company bhg --env ${{ matrix.env }} --s3
