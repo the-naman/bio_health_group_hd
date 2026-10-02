@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
  
 from simulator import mess
 from simulator.formats import render
-from simulator.world import World, TABLES, CUTOVER, BHG_START, FQF_START, source_of, ext_of
+from simulator.world import World, TABLES, BINARY, CUTOVER, BHG_START, FQF_START, source_of, ext_of
  
 IST = timezone(timedelta(hours=5, minutes=30))
 STATE_PREFIX = "landing/_sim/state/"   # empty marker objects: landing/_sim/state/<yyyy-mm-dd>
@@ -28,13 +28,14 @@ class Sink:
             self.s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
  
     def put(self, key, body):
+        data = body if isinstance(body, bytes) else body.encode("utf-8")
         if self.s3:
-            self.s3.put_object(Bucket=self.bucket, Key=key, Body=body.encode("utf-8"))
+            self.s3.put_object(Bucket=self.bucket, Key=key, Body=data)
         else:
             path = os.path.join(self.out, key)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(body)
+            with open(path, "wb") as f:
+                f.write(data)
  
     def last_date(self):
         if self.s3:
@@ -88,8 +89,9 @@ def write_full_load(world, company, env, sink):
         while (y, m) <= (CUTOVER.year, CUTOVER.month):
             fd = min(date(y, m, calendar.monthrange(y, m)[1]), CUTOVER)
             rows = mess.apply(env, table, fd, by_month.get((y, m), []))
-            sink.put(key_for(table, fd, 1), render(env, table, rows, fd))
-            count += 1
+            if rows or table not in BINARY:                 # a document is sent only when it has lines
+                sink.put(key_for(table, fd, 1), render(env, table, rows, fd))
+                count += 1
             y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     return count
  
@@ -99,6 +101,8 @@ def write_day(world, company, env, d, sink):
     count = 0
     for table in TABLES[company]:
         rows = mess.apply(env, table, d, [x for x in world.rows[table] if x["_emit"] == d])
+        if not rows and table in BINARY:                    # a document is sent only when it has lines
+            continue
         body = render(env, table, rows, d)
         if inc.get("unreadable") == table:
             sink.put(key_for(table, d, 1), render(env, table, rows, d, broken=True))  # broken file
