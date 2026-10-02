@@ -62,10 +62,17 @@ COLUMNS = {
 }
 NEW_COLUMNS = {"patients": "preferred_language", "loans": "channel"}
 SOURCE = {
+    # bhg (parent): 3 sources, all CSV. Tables not listed here come from "files".
     "doctors": "mysql", "insurance_claims": "salesforce",
-    "branches": "mysql", "loan_products": "mysql", "emi_schedule": "mysql",
+    # fqf (child): 6 scattered sources, 4 formats
     "customers": "salesforce", "loan_applications": "salesforce", "collections": "salesforce",
+    "branches": "mysql", "loan_products": "mysql",
+    "loans": "legacy", "disbursements": "legacy", "emi_schedule": "legacy",   # pipe-delimited text
+    "credit_checks": "bureau_api",                                              # JSON lines
+    "repayments": "gateway",                                                    # JSON lines
+    "credit_policy": "excel",                                                   # CSV, drifting headers
 }
+EXT = {"legacy": "txt", "bureau_api": "json", "gateway": "json"}               # everything else: csv
 TABLES = {
     "bhg": ["hospitals", "departments", "doctors", "patients", "appointments", "admissions", "treatments",
             "pharmacy_sales", "invoices", "payments", "insurance_claims"],
@@ -76,6 +83,14 @@ TABLES = {
 
 def source_of(table):
     return SOURCE.get(table, "files")
+
+
+def ext_of(table):
+    return EXT.get(source_of(table), "csv")
+
+
+def company_of(table):
+    return "bhg" if table in TABLES["bhg"] else "fqf"
 
 
 class World:
@@ -196,7 +211,7 @@ class World:
             pid, doc = r.choice(pids), r.choice(self.doctors)
             status = r.choices(["completed", "cancelled", "no_show"], [88, 8, 4])[0]
             fee = r.choice([500, 700, 800, 1000, 1200, 1500])
-            emit = d + timedelta(days=r.randint(1, 10)) if r.random() < 0.02 else d
+            emit = d + timedelta(days=r.randint(1, 10)) if r.random() < 0.01 else d
             doc_id = doc["doctor_id"] if r.random() > 0.005 else f"DOC{9000 + r.randint(0, 999)}"
             self.add("appointments", {"appt_id": appt, "patient_id": pid, "doctor_id": doc_id,
                                       "appt_ts": self.ts(d).isoformat(sep=" "), "status": status,
@@ -227,7 +242,7 @@ class World:
             code, name, base = r.choice(PROCEDURES)
             cost = round(base * r.uniform(0.85, 1.25), 2)
             a[2] += cost
-            emit = d + timedelta(days=r.randint(1, 10)) if r.random() < 0.02 else d
+            emit = d + timedelta(days=r.randint(1, 10)) if r.random() < 0.01 else d
             self.add("treatments", {"treatment_id": self.nid("TRT", 7), "admission_id": a[1]["admission_id"],
                                     "doctor_id": a[1]["doctor_id"], "procedure_code": code, "procedure_name": name,
                                     "treatment_date": str(d), "cost": self.money(cost),
@@ -266,7 +281,7 @@ class World:
         # pharmacy
         for _ in range(self.n(30)):
             code, name, price = r.choice(DRUGS)
-            emit = d + timedelta(days=r.randint(1, 10)) if r.random() < 0.02 else d
+            emit = d + timedelta(days=r.randint(1, 10)) if r.random() < 0.01 else d
             self.add("pharmacy_sales", {"sale_id": self.nid("PHS", 7), "hospital_id": f"HSP{r.randint(1, 5):02d}",
                                         "patient_id": r.choice(pids) if r.random() < 0.8 else "",
                                         "drug_code": code, "drug_name": name, "qty": str(r.randint(1, 5)),
@@ -302,14 +317,41 @@ class World:
             self.add("branches", {"branch_id": f"BR{i:02d}", "branch_name": f"Flexi Quant {city}", "city": city,
                                   "state": state, "opened_date": f"{2019 + i % 3}-04-01",
                                   "updated_at": self.ts(d).isoformat(sep=" "), "is_deleted": "0"}, d)
+        self.products, self.policies = {}, {}
         for pid, name, typ, rate, mn, mx, ten in PRODUCTS:
-            self.add("loan_products", {"product_id": pid, "product_name": name, "loan_type": typ, "rate_pct": str(rate),
-                                       "min_amt": str(mn), "max_amt": str(mx), "max_tenure_m": str(ten),
-                                       "updated_at": self.ts(d).isoformat(sep=" "), "is_deleted": "0"}, d)
-            self.add("credit_policy", {"policy_id": f"POL{pid[3:]}01", "product_id": pid,
-                                       "max_exposure_per_customer": str(mx * 2), "max_dti": "45",
-                                       "min_bureau_score": "650", "effective_from": str(d), "effective_to": "",
-                                       "last_modified": self.ts(d).isoformat(sep=" ")}, d)
+            prow = {"product_id": pid, "product_name": name, "loan_type": typ, "rate_pct": str(rate),
+                    "min_amt": str(mn), "max_amt": str(mx), "max_tenure_m": str(ten),
+                    "updated_at": self.ts(d).isoformat(sep=" "), "is_deleted": "0"}
+            pol = {"policy_id": f"POL{pid[3:]}01", "product_id": pid, "max_exposure_per_customer": str(mx * 2),
+                   "max_dti": "45", "min_bureau_score": "650", "effective_from": str(d), "effective_to": "",
+                   "last_modified": self.ts(d).isoformat(sep=" ")}
+            self.products[pid], self.policies[pid] = prow, pol
+            self.add("loan_products", dict(prow), d)
+            self.add("credit_policy", dict(pol), d)
+
+    def revise_masters(self, d):
+        """SCD2 material: a credit policy changes about every 45 days, a product rate about every 90 days."""
+        r = self.r
+        age = (d - FQF_START).days
+        if age and age % 45 == 0:
+            pid = r.choice(list(self.policies))
+            old = self.policies[pid]
+            closed = dict(old)
+            closed["effective_to"], closed["last_modified"] = str(d - timedelta(days=1)), self.ts(d).isoformat(sep=" ")
+            self.add("credit_policy", closed, d)
+            ver = int(old["policy_id"][-2:]) + 1
+            new = dict(old)
+            new.update({"policy_id": f"POL{pid[3:]}{ver:02d}", "effective_from": str(d), "effective_to": "",
+                        "min_bureau_score": str(r.choice([640, 650, 660, 675, 700])),
+                        "max_dti": str(r.choice([40, 45, 50])), "last_modified": self.ts(d).isoformat(sep=" ")})
+            self.policies[pid] = new
+            self.add("credit_policy", dict(new), d)
+        if age and age % 90 == 0:
+            pid = r.choice(list(self.products))
+            prow = self.products[pid]
+            prow["rate_pct"] = str(round(float(prow["rate_pct"]) + r.choice([-0.5, 0.25, 0.5]), 2))
+            prow["updated_at"] = self.ts(d).isoformat(sep=" ")
+            self.add("loan_products", dict(prow), d)
 
     def new_customer(self, d, person=None, lookalike=False):
         if person is None:
@@ -330,6 +372,14 @@ class World:
         self.customers[cid] = row
         self.fqf_cust_of_person[key] = cid
         self.add("customers", dict(row), d)
+        if self.r.random() < 0.03:                       # same person entered again in another branch system
+            dup = dict(row)
+            dup["Id"] = self.sfid("001")
+            dup["Name"] = self.r.choice([row["Name"].upper(), row["Name"].split()[0][0] + ". " + row["Name"].split()[-1]])
+            dup["Branch__c"] = f"BR{self.r.randint(1, 5):02d}"
+            dup["LastModifiedDate"] = self.ts(d + timedelta(days=2)).isoformat()
+            self.customers[dup["Id"]] = dup
+            self.add("customers", dict(dup), d + timedelta(days=self.r.randint(1, 5)))
         return cid
 
     def apply(self, d, cid, product, amount, tenure, inv=""):
@@ -424,8 +474,9 @@ class World:
                                          "LastModifiedDate": self.ts(d + timedelta(days=30)).isoformat(),
                                          "IsDeleted": "false"}, d + timedelta(days=30))
             if pay_d:
-                emit = pay_d + timedelta(days=r.randint(1, 10)) if r.random() < 0.02 else pay_d
-                self.add("repayments", {"repay_id": self.nid("RPY", 7), "loan_id": lid, "emi_no": str(k),
+                emit = pay_d + timedelta(days=r.randint(1, 10)) if r.random() < 0.04 else pay_d
+                ref = lid if r.random() > 0.02 else f"LN{9000000 + r.randint(0, 99999)}"
+                self.add("repayments", {"repay_id": self.nid("RPY", 7), "loan_id": ref, "emi_no": str(k),
                                         "paid_date": str(pay_d), "amount": self.money(emi),
                                         "mode": r.choice(["nach", "upi", "netbanking"]), "late_fee": str(fee),
                                         "last_modified": self.ts(pay_d).isoformat(sep=" ")}, emit)
@@ -435,6 +486,7 @@ class World:
                     upd = dict(ln["row"])
                     upd["status"], upd["last_modified"] = "closed", self.ts(pay_d, 20, 23).isoformat(sep=" ")
                     self.add("loans", upd, pay_d)
+        self.revise_masters(d)
         # customer updates / rare soft delete
         for _ in range(self.n(1)):
             cid = r.choice(cids)
