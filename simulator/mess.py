@@ -1,18 +1,26 @@
-"""Planted mess (Phase 4 section 10). Deterministic per environment, table and file date."""
+"""Planted mess (Phase 4 section 10). Deterministic per environment, table and file date.
+
+The parent (bhg) is a mature company: about half the base rates.
+The child (fqf) is a fresh acquisition with scattered systems: about double.
+JSON sources (bureau_api, gateway) carry typed values, so text-format mess is not applied to them;
+they get their own JSON mess in formats.py.
+"""
 import random
 
+from simulator.world import company_of, source_of
+
+FACTOR = {"bhg": 0.5, "fqf": 2.0}
 DATE_COLS = {"opened_date", "joining_date", "dob", "invoice_date", "pay_date", "treatment_date",
-             "disb_date", "paid_date", "start_date", "effective_from", "effective_to"}
+             "disb_date", "paid_date", "start_date", "due_date", "effective_from", "effective_to"}
 AMOUNT_COLS = {"consult_fee", "cost", "unit_price", "gross_amt", "discount_amt", "tax_amt", "net_amt",
-               "amount", "principal", "late_fee"}
+               "amount", "principal", "late_fee", "principal_due", "interest_due", "emi_amount",
+               "max_exposure_per_customer"}
 OPTIONAL = {"insurance_provider", "discharge_ts", "Employment__c"}
 PHONE_COLS = {"phone", "Phone"}
 CITY_ALIAS = {"Bengaluru": ["Bangalore", "BLR", "bengaluru "], "Mumbai": ["Bombay", "MUMBAI"],
               "Delhi": ["New Delhi", "delhi"], "Chennai": ["Madras", "chennai"], "Hyderabad": ["Hyd", "HYDERABAD"]}
 DUP_TABLES = {"appointments", "pharmacy_sales", "payments", "repayments", "customers"}
-FILES_TABLES = {"hospitals", "departments", "patients", "appointments", "admissions", "treatments",
-                "pharmacy_sales", "invoices", "payments", "credit_checks", "loans", "disbursements",
-                "repayments", "credit_policy"}
+TEXT_SOURCES = {"files", "legacy", "excel"}      # text exports where dates and amounts get mangled
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
@@ -31,28 +39,32 @@ def _phone(v, r):
 
 def apply(env, table, file_date, rows):
     r = random.Random(f"mess-{env}-{table}-{file_date}")
+    k = FACTOR[company_of(table)]
+    src = source_of(table)
+    text = src in TEXT_SOURCES
     out = []
     for row in rows:
         row = dict(row)
         for c, v in row.items():
-            if c in OPTIONAL and r.random() < 0.02:
-                row[c] = r.choice(["NULL", "N/A", "-", "null"])   # fake null
+            if c in OPTIONAL and r.random() < 0.02 * k:
+                row[c] = r.choice(["NULL", "N/A", "-", "null"])          # fake null
                 continue
             if not isinstance(v, str) or v == "":
                 continue
-            if c in DATE_COLS and table in FILES_TABLES and r.random() < 0.03:
-                row[c] = _date(v, r)
-            elif c in AMOUNT_COLS and table in FILES_TABLES and r.random() < 0.03:
-                row[c] = f"₹{float(v):,.2f}"
-            elif c in PHONE_COLS and r.random() < 0.30:
+            if text and c in DATE_COLS and r.random() < 0.03 * k:
+                row[c] = _date(v, r)                                      # mixed date formats
+            elif text and c in AMOUNT_COLS and r.random() < 0.03 * k:
+                row[c] = f"₹{float(v):,.2f}"                              # amount as text
+            elif c in PHONE_COLS and r.random() < min(0.30 * k, 0.6):
                 row[c] = _phone(v, r)
-            elif c in ("city", "City__c") and v in CITY_ALIAS and r.random() < 0.05:
+            elif c in ("city", "City__c") and v in CITY_ALIAS and r.random() < 0.05 * k:
                 row[c] = r.choice(CITY_ALIAS[v])
-            elif c in ("full_name", "Name", "status") and r.random() < 0.05:
+            elif c in ("full_name", "Name", "status") and r.random() < 0.05 * k:
                 row[c] = r.choice([v.upper(), v.lower(), f"  {v} "])
-        if table == "patients" and r.random() < 0.005:
-            row["aadhaar"] = row["aadhaar"][:11]          # invalid Aadhaar
+        for c in ("aadhaar", "Aadhaar__c"):                               # invalid Aadhaar
+            if c in row and r.random() < 0.005 * k:
+                row[c] = row[c][:11]
         out.append(row)
-        if table in DUP_TABLES and r.random() < 0.02:
-            out.append(dict(row))                        # duplicate row
+        if table in DUP_TABLES and r.random() < 0.02 * k:
+            out.append(dict(row))                                         # duplicate row
     return out
