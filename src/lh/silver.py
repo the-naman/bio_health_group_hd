@@ -7,10 +7,14 @@ and adds `_bad`: the list of columns that had a value which could not be read.
 Rules then decide what happens to a row (split_and_log):
   missing_key, unreadable_value (number, date, code), value_not_allowed -> row goes to silver.quarantine
   too_late (daily files only: the change is older than late_days)       -> row goes to silver.quarantine
+  orphan (the parent row is missing)                                    -> row waits in silver.quarantine and is
+        tried again on every run; after orphan_retry_days (by business date) it is accepted with
+        orphan_of naming the missing parent, so no money event is lost and gold can show "unknown"
   unreadable phone or national id                                       -> value stays NULL, row is kept (warning)
 Every rule's result is written to ops.dq_results.
 """
 import os
+from datetime import timedelta
 from functools import reduce
  
 import yaml
@@ -143,7 +147,7 @@ def _kinds(spec):
     return {t: (r if isinstance(r, str) else r[0]) for t, r in spec["columns"].items()}
  
  
-RULES = ("missing_key", "unreadable_value", "value_not_allowed", "too_late")
+RULES = ("missing_key", "unreadable_value", "value_not_allowed", "too_late", "orphan")
  
  
 def check(df, spec, cfg=None):
@@ -165,9 +169,30 @@ def check(df, spec, cfg=None):
         days = F.datediff("_business_date", F.to_date(spec["order"]))
         late = (F.col("_business_date") >= F.lit(str(cfg["daily_start"])).cast("date")) & (days > int(cfg["late_days"]))
         rules.append(("too_late", late, F.concat(days.cast("string"), F.lit(" days late"))))
+    if "_wait" in df.columns:
+        rules.append(("orphan", F.col("_wait"), F.col("orphan_of")))
     return (df.withColumn("_rule", F.coalesce(*[F.when(cond, F.lit(n)) for n, cond, _ in rules]))
               .withColumn("_detail", F.coalesce(*[F.when(cond, d) for _, cond, d in rules]))
               .withColumn("_soft", F.array_except("_bad", hard)))
+ 
+ 
+def mark_orphans(spark, cfg, df, spec, asof):
+    """Add orphan_of (the columns whose parent row is missing, NULL when all parents exist) and
+    _wait (the row is still inside the retry window, counted in business days up to `asof`).
+    A parent is looked up in the silver table named in `parents`, by the same column name."""
+    names = list(spec.get("parents", {}))
+    if not names or asof is None:
+        return df.withColumn("orphan_of", F.lit(None).cast("string")).withColumn("_wait", F.lit(False))
+    missing = []
+    for col in names:
+        keys = (spark.table(f"{cfg['catalog']}.silver.{spec['parents'][col]}")
+                     .select(F.col(col).alias(f"_p_{col}")).distinct())
+        df = df.join(F.broadcast(keys), F.col(col) == F.col(f"_p_{col}"), "left")
+        missing.append(F.when(F.col(col).isNotNull() & F.col(f"_p_{col}").isNull(), F.lit(col)))
+    df = (df.withColumn("orphan_of", F.nullif(F.array_join(F.array_compact(F.array(*missing)), ","), F.lit("")))
+            .drop(*[f"_p_{c}" for c in names]))
+    age = F.datediff(F.lit(asof), F.col("_business_date"))
+    return df.withColumn("_wait", F.col("orphan_of").isNotNull() & (age <= int(cfg["orphan_retry_days"])))
  
  
 def ensure_tables(spark, cfg):
@@ -197,28 +222,62 @@ def to_quarantine(spark, cfg, table, bad):
              VALUES (s.table_name, s.row_key, s.rule, s.detail, s.raw_row, s.source_file, s.seen, s.seen, 'open')""")
  
  
-def split_and_log(spark, cfg, table, df, spec):
+def split_and_log(spark, cfg, table, df, spec, asof=None):
     """Cleaned rows (from apply) -> good rows. Bad rows go to silver.quarantine, counts to ops.dq_results.
-    Returns (good rows, {"rows": rows checked, rule: failed count, ...})."""
-    checked = check(df, spec, cfg)
+    `asof` (newest business date of the table) switches on the orphan check.
+    Returns (good rows, stats): rows checked, failed count per rule, and "hold" = the oldest load
+    time among waiting orphans (the watermark must stay before it so they are tried again)."""
+    checked = check(mark_orphans(spark, cfg, df, spec, asof), spec, cfg)
+    warn = {"unreadable_contact": F.size("_soft") > 0,
+            "orphan_accepted": F.col("_rule").isNull() & F.col("orphan_of").isNotNull()}
+    hold = F.min(F.when(F.col("_rule") == "orphan", F.col("_ingest_ts"))) if "_ingest_ts" in df.columns else F.lit(None)
     stats = checked.agg(F.count("*").alias("n"),
                         *[F.sum(F.when(F.col("_rule") == r, 1).otherwise(0)).alias(r) for r in RULES],
-                        F.sum(F.when(F.size("_soft") > 0, 1).otherwise(0)).alias("unreadable_contact")).first()
+                        *[F.sum(F.when(cond, 1).otherwise(0)).alias(r) for r, cond in warn.items()],
+                        hold.alias("hold")).first()
     n = stats["n"]
-    failed = {r: int(stats[r] or 0) for r in RULES + ("unreadable_contact",)}
-    if n and sum(v for r, v in failed.items() if r != "unreadable_contact"):
+    failed = {r: int(stats[r] or 0) for r in RULES + tuple(warn)}
+    if n and sum(failed[r] for r in RULES):
         bad = checked.filter("_rule IS NOT NULL").select(
             F.coalesce(F.nullif(F.concat_ws("|", *spec["key"]), F.lit("")), F.lit("(no key)")).alias("row_key"),
             F.col("_rule").alias("rule"), F.col("_detail").alias("detail"),
             F.col("_raw").alias("raw_row"), F.col("_source_file").alias("source_file"))
         to_quarantine(spark, cfg, table, bad)
-    status = lambda r, v: "pass" if v == 0 else ("warn" if r == "unreadable_contact" else "quarantined")
+    status = lambda r, v: "pass" if v == 0 else ("warn" if r in warn else "quarantined")
     spark.createDataFrame([(table, r, n, v, status(r, v)) for r, v in failed.items()],
                           "table_name string, rule string, checked long, failed long, status string") \
          .select(F.current_timestamp().alias("run_ts"), "*") \
          .write.mode("append").saveAsTable(f"{cfg['catalog']}.ops.dq_results")
-    good = checked.filter("_rule IS NULL").drop("_rule", "_detail", "_soft", "_bad", "_raw")
-    return good, {"rows": n, **failed}
+    good = checked.filter("_rule IS NULL").drop("_rule", "_detail", "_soft", "_bad", "_raw", "_wait")
+    return good, {"rows": n, **failed, "hold": stats["hold"]}
+ 
+ 
+def close_orphans(spark, cfg, table, spec):
+    """Orphans of this table that have reached silver are closed in the quarantine:
+    resolved = the parent arrived, accepted = the retry window ended and the row was let in."""
+    key = ", ".join(f"`{k}`" for k in spec["key"])
+    spark.sql(f"""
+        MERGE INTO {cfg['catalog']}.silver.quarantine AS q
+        USING (SELECT concat_ws('|', {key}) AS row_key, max(orphan_of) AS orphan_of
+               FROM {cfg['catalog']}.silver.{table} GROUP BY 1) AS s
+          ON q.table_name = '{table}' AND q.rule = 'orphan' AND q.status = 'open' AND q.row_key = s.row_key
+        WHEN MATCHED THEN UPDATE SET
+          q.status = CASE WHEN s.orphan_of IS NULL THEN 'resolved' ELSE 'accepted' END,
+          q.last_seen = current_timestamp()""")
+ 
+ 
+def _finish(spark, cfg, table, spec, mark, stats):
+    """After a successful merge: close orphans that got in, then move the watermark.
+    It stays just before the oldest waiting orphan, so that row is read again next run."""
+    if spec.get("parents"):
+        close_orphans(spark, cfg, table, spec)
+    if stats["hold"] is not None:
+        mark = min(mark, stats["hold"] - timedelta(microseconds=1))
+    save_state(spark, cfg, table, mark)
+ 
+ 
+def _asof(new):
+    return new.agg(F.max("_business_date")).first()[0] if "_business_date" in new.columns else None
  
  
 def bronze_new(spark, cfg, table):
@@ -252,14 +311,15 @@ def load_latest(spark, cfg, table, spec):
     """Bronze -> silver for a table kept as one row per key (mode: latest).
     New bronze rows are cleaned, checked, reduced to the latest row per key and merged.
     An older version that arrives late never overwrites a newer one.
-    Returns {"rows", "quarantined", "inserted", "updated"}."""
+    Returns {"rows", "quarantined", "orphan_wait", "orphan_accepted", "inserted", "updated"}."""
     target = f"{cfg['catalog']}.silver.{table}"
     new, mark = bronze_new(spark, cfg, table)
     if mark is None:
-        return {"rows": 0, "quarantined": 0, "inserted": 0, "updated": 0}
-    good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec)
+        return {"rows": 0, "quarantined": 0, "orphan_wait": 0, "orphan_accepted": 0, "inserted": 0, "updated": 0}
+    good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec, _asof(new))
     rows = latest(good, spec).withColumn("_silver_ts", F.current_timestamp())
-    out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES)}
+    out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES),
+           "orphan_wait": stats["orphan"], "orphan_accepted": stats["orphan_accepted"]}
     if not spark.catalog.tableExists(target):
         rows.write.saveAsTable(target)
         out.update(inserted=spark.table(target).count(), updated=0)
@@ -274,7 +334,7 @@ def load_latest(spark, cfg, table, spec):
             WHEN MATCHED AND (s.{o} > t.{o} OR (s.{o} = t.{o} AND s._ingest_ts > t._ingest_ts)) THEN UPDATE SET *
             WHEN NOT MATCHED THEN INSERT *""").first()
         out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
-    save_state(spark, cfg, table, mark)                # only after the merge: a failed run is simply repeated
+    _finish(spark, cfg, table, spec, mark, stats)      # only after the merge: a failed run is simply repeated
     return out
  
  
@@ -316,16 +376,17 @@ def scd2_chain(existing, incoming, spec):
  
 def load_scd2(spark, cfg, table, spec):
     """Bronze -> silver for a table that keeps history (mode: scd2).
-    Returns {"rows", "quarantined", "inserted", "updated"}."""
+    Returns {"rows", "quarantined", "orphan_wait", "orphan_accepted", "inserted", "updated"}."""
     target = f"{cfg['catalog']}.silver.{table}"
     new, mark = bronze_new(spark, cfg, table)
     if mark is None:
-        return {"rows": 0, "quarantined": 0, "inserted": 0, "updated": 0}
-    good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec)
+        return {"rows": 0, "quarantined": 0, "orphan_wait": 0, "orphan_accepted": 0, "inserted": 0, "updated": 0}
+    good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec, _asof(new))
     exists = spark.catalog.tableExists(target)
     rows = scd2_chain(spark.table(target) if exists else None, good, spec) \
         .withColumn("_silver_ts", F.current_timestamp())
-    out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES)}
+    out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES),
+           "orphan_wait": stats["orphan"], "orphan_accepted": stats["orphan_accepted"]}
     if not exists:
         rows.write.saveAsTable(target)
         out.update(inserted=spark.table(target).count(), updated=0)
@@ -339,7 +400,7 @@ def load_scd2(spark, cfg, table, spec):
             WHEN MATCHED AND (NOT (t.valid_to <=> s.valid_to) OR t._row_hash <> s._row_hash) THEN UPDATE SET *
             WHEN NOT MATCHED THEN INSERT *""").first()
         out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
-    save_state(spark, cfg, table, mark)
+    _finish(spark, cfg, table, spec, mark, stats)
     return out
  
  
