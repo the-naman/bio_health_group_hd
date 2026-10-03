@@ -6,6 +6,7 @@ and adds `_bad`: the list of columns that had a value which could not be read.
  
 Rules then decide what happens to a row (split_and_log):
   missing_key, unreadable_value (number, date, code), value_not_allowed -> row goes to silver.quarantine
+  too_late (daily files only: the change is older than late_days)       -> row goes to silver.quarantine
   unreadable phone or national id                                       -> value stays NULL, row is kept (warning)
 Every rule's result is written to ops.dq_results.
 """
@@ -142,18 +143,28 @@ def _kinds(spec):
     return {t: (r if isinstance(r, str) else r[0]) for t, r in spec["columns"].items()}
  
  
-def check(df, spec):
+RULES = ("missing_key", "unreadable_value", "value_not_allowed", "too_late")
+ 
+ 
+def check(df, spec, cfg=None):
     """Add _rule and _detail to cleaned rows: the first rule a row breaks, NULL for a good row.
-    Also adds _soft: columns that were unreadable but do not block the row."""
+    Also adds _soft: columns that were unreadable but do not block the row.
+    With cfg, a row in a daily file whose change (order column) is more than late_days older
+    than the file's business date is too_late. History files (before daily_start) are exempt."""
     kinds = _kinds(spec)
     hard = F.array(*[F.lit(c) for c, k in kinds.items() if k in HARD]).cast("array<string>")
     hard_bad = F.array_intersect("_bad", hard)
-    no_key = reduce(lambda a, b: a | b, [F.col(k).isNull() for k in spec["key"]])
-    rules = [("missing_key", no_key, F.lit(",".join(spec["key"]))),
+    need = spec["key"] + ([spec["order"]] if spec.get("mode") == "scd2" else [])    # history needs its date
+    no_key = reduce(lambda a, b: a | b, [F.col(k).isNull() for k in need])
+    rules = [("missing_key", no_key, F.lit(",".join(need))),
              ("unreadable_value", F.size(hard_bad) > 0, F.array_join(hard_bad, ","))]
     for col, values in spec.get("allowed", {}).items():
         bad = F.col(col).isNotNull() & ~F.col(col).isin([str(v) for v in values])
         rules.append(("value_not_allowed", bad, F.concat(F.lit(col + "="), F.col(col))))
+    if cfg and "_business_date" in df.columns:
+        days = F.datediff("_business_date", F.to_date(spec["order"]))
+        late = (F.col("_business_date") >= F.lit(str(cfg["daily_start"])).cast("date")) & (days > int(cfg["late_days"]))
+        rules.append(("too_late", late, F.concat(days.cast("string"), F.lit(" days late"))))
     return (df.withColumn("_rule", F.coalesce(*[F.when(cond, F.lit(n)) for n, cond, _ in rules]))
               .withColumn("_detail", F.coalesce(*[F.when(cond, d) for _, cond, d in rules]))
               .withColumn("_soft", F.array_except("_bad", hard)))
@@ -166,6 +177,8 @@ def ensure_tables(spark, cfg):
         source_file STRING, first_seen TIMESTAMP, last_seen TIMESTAMP, status STRING)""")
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.ops.dq_results (
         run_ts TIMESTAMP, table_name STRING, rule STRING, checked BIGINT, failed BIGINT, status STRING)""")
+    spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.ops.silver_state (
+        table_name STRING, last_ingest_ts TIMESTAMP, updated_ts TIMESTAMP)""")
  
  
 def to_quarantine(spark, cfg, table, bad):
@@ -187,13 +200,12 @@ def to_quarantine(spark, cfg, table, bad):
 def split_and_log(spark, cfg, table, df, spec):
     """Cleaned rows (from apply) -> good rows. Bad rows go to silver.quarantine, counts to ops.dq_results.
     Returns (good rows, {"rows": rows checked, rule: failed count, ...})."""
-    checked = check(df, spec)
+    checked = check(df, spec, cfg)
     stats = checked.agg(F.count("*").alias("n"),
-                        *[F.sum(F.when(F.col("_rule") == r, 1).otherwise(0)).alias(r)
-                          for r in ("missing_key", "unreadable_value", "value_not_allowed")],
+                        *[F.sum(F.when(F.col("_rule") == r, 1).otherwise(0)).alias(r) for r in RULES],
                         F.sum(F.when(F.size("_soft") > 0, 1).otherwise(0)).alias("unreadable_contact")).first()
     n = stats["n"]
-    failed = {r: int(stats[r] or 0) for r in ("missing_key", "unreadable_value", "value_not_allowed", "unreadable_contact")}
+    failed = {r: int(stats[r] or 0) for r in RULES + ("unreadable_contact",)}
     if n and sum(v for r, v in failed.items() if r != "unreadable_contact"):
         bad = checked.filter("_rule IS NOT NULL").select(
             F.coalesce(F.nullif(F.concat_ws("|", *spec["key"]), F.lit("")), F.lit("(no key)")).alias("row_key"),
@@ -209,14 +221,25 @@ def split_and_log(spark, cfg, table, df, spec):
     return good, {"rows": n, **failed}
  
  
-def bronze_new(spark, cfg, table, target):
-    """Bronze rows not yet seen by the silver table: loaded after the newest row silver holds."""
+def bronze_new(spark, cfg, table):
+    """Bronze rows silver has not processed yet, and the newest load time among them.
+    The last processed load time per table is kept in ops.silver_state (the watermark)."""
     df = spark.table(f"{cfg['catalog']}.bronze.{table}")
-    if spark.catalog.tableExists(target):
-        mark = spark.table(target).agg(F.max("_ingest_ts")).first()[0]
-        if mark is not None:
-            df = df.filter(F.col("_ingest_ts") > F.lit(mark))
-    return df
+    state = spark.table(f"{cfg['catalog']}.ops.silver_state").filter(F.col("table_name") == table).first()
+    if state is not None:
+        df = df.filter(F.col("_ingest_ts") > F.lit(state["last_ingest_ts"]))
+    return df, df.agg(F.max("_ingest_ts")).first()[0]
+ 
+ 
+def save_state(spark, cfg, table, mark):
+    spark.createDataFrame([(table, mark)], "table_name string, last_ingest_ts timestamp") \
+         .createOrReplaceTempView("_state_in")
+    spark.sql(f"""
+        MERGE INTO {cfg['catalog']}.ops.silver_state AS t
+        USING _state_in AS s ON t.table_name = s.table_name
+        WHEN MATCHED THEN UPDATE SET t.last_ingest_ts = s.last_ingest_ts, t.updated_ts = current_timestamp()
+        WHEN NOT MATCHED THEN INSERT (table_name, last_ingest_ts, updated_ts)
+             VALUES (s.table_name, s.last_ingest_ts, current_timestamp())""")
  
  
 def latest(df, spec):
@@ -231,24 +254,96 @@ def load_latest(spark, cfg, table, spec):
     An older version that arrives late never overwrites a newer one.
     Returns {"rows", "quarantined", "inserted", "updated"}."""
     target = f"{cfg['catalog']}.silver.{table}"
-    new = bronze_new(spark, cfg, table, target)
-    if new.limit(1).count() == 0:
+    new, mark = bronze_new(spark, cfg, table)
+    if mark is None:
         return {"rows": 0, "quarantined": 0, "inserted": 0, "updated": 0}
     good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec)
     rows = latest(good, spec).withColumn("_silver_ts", F.current_timestamp())
-    out = {"rows": stats["rows"],
-           "quarantined": stats["missing_key"] + stats["unreadable_value"] + stats["value_not_allowed"]}
+    out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES)}
     if not spark.catalog.tableExists(target):
         rows.write.saveAsTable(target)
-        return {**out, "inserted": spark.table(target).count(), "updated": 0}
-    rows.createOrReplaceTempView("_silver_in")
-    on = " AND ".join(f"t.`{k}` = s.`{k}`" for k in spec["key"])
-    o = f"`{spec['order']}`"
-    m = spark.sql(f"""
-        MERGE INTO {target} AS t
-        USING _silver_in AS s
-          ON {on}
-        WHEN MATCHED AND (s.{o} > t.{o} OR (s.{o} = t.{o} AND s._ingest_ts > t._ingest_ts)) THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *""").first()
-    return {**out, "inserted": m["num_inserted_rows"], "updated": m["num_updated_rows"]}
+        out.update(inserted=spark.table(target).count(), updated=0)
+    else:
+        rows.createOrReplaceTempView("_silver_in")
+        on = " AND ".join(f"t.`{k}` = s.`{k}`" for k in spec["key"])
+        o = f"`{spec['order']}`"
+        m = spark.sql(f"""
+            MERGE INTO {target} AS t
+            USING _silver_in AS s
+              ON {on}
+            WHEN MATCHED AND (s.{o} > t.{o} OR (s.{o} = t.{o} AND s._ingest_ts > t._ingest_ts)) THEN UPDATE SET *
+            WHEN NOT MATCHED THEN INSERT *""").first()
+        out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
+    save_state(spark, cfg, table, mark)                # only after the merge: a failed run is simply repeated
+    return out
+ 
+ 
+def tracked(spec):
+    """Columns whose change makes a new history version: everything except the key and the order column."""
+    return [c for c in spec["columns"] if c not in spec["key"] and c != spec["order"]] + ["is_deleted"]
+ 
+ 
+def scd2_chain(existing, incoming, spec):
+    """Build the full version chain (SCD Type 2) for every key that has new rows.
+ 
+    existing : the silver table (or None on the first load)
+    incoming : good cleaned rows from bronze
+    Steps: add a hash of the tracked columns; take the stored versions of the touched keys;
+    keep one row per key and valid_from; drop a new version that changes nothing;
+    then valid_to = the next version's valid_from, and the last version is current.
+    A version that arrives late lands in its right place, because the whole chain is rebuilt.
+    """
+    key = spec["key"]
+    parts = [F.coalesce(F.col(c).cast("string"), F.lit("~")) for c in tracked(spec)]
+    inc = (incoming.withColumn("_row_hash", F.sha2(F.concat_ws("||", *parts), 256))
+                   .withColumn("valid_from", F.col(spec["order"])).withColumn("_new", F.lit(True)))
+    versions = inc
+    if existing is not None:
+        old = existing.join(inc.select(*key).distinct(), key, "left_semi").withColumn("_new", F.lit(False))
+        versions = old.select(*inc.columns).unionByName(inc)
+    slot = Window.partitionBy(*key, "valid_from")
+    versions = (versions.withColumn("_had", F.min("_new").over(slot) == F.lit(False))     # this version was stored before
+                        .withColumn("_rn", F.row_number().over(slot.orderBy(F.col("_ingest_ts").desc(), F.col("_new"))))
+                        .filter("_rn = 1"))
+    chain = Window.partitionBy(*key).orderBy("valid_from")
+    versions = versions.withColumn("_prev", F.lag("_row_hash").over(chain))
+    same = F.col("_new") & ~F.col("_had") & F.col("_prev").isNotNull() & (F.col("_prev") == F.col("_row_hash"))
+    versions = versions.filter(~same)
+    return (versions.withColumn("valid_to", F.lead("valid_from").over(chain))
+                    .withColumn("is_current", F.col("valid_to").isNull())
+                    .drop("_new", "_had", "_rn", "_prev"))
+ 
+ 
+def load_scd2(spark, cfg, table, spec):
+    """Bronze -> silver for a table that keeps history (mode: scd2).
+    Returns {"rows", "quarantined", "inserted", "updated"}."""
+    target = f"{cfg['catalog']}.silver.{table}"
+    new, mark = bronze_new(spark, cfg, table)
+    if mark is None:
+        return {"rows": 0, "quarantined": 0, "inserted": 0, "updated": 0}
+    good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec)
+    exists = spark.catalog.tableExists(target)
+    rows = scd2_chain(spark.table(target) if exists else None, good, spec) \
+        .withColumn("_silver_ts", F.current_timestamp())
+    out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES)}
+    if not exists:
+        rows.write.saveAsTable(target)
+        out.update(inserted=spark.table(target).count(), updated=0)
+    else:
+        rows.createOrReplaceTempView("_silver_in")
+        on = " AND ".join(f"t.`{k}` = s.`{k}`" for k in spec["key"])
+        m = spark.sql(f"""
+            MERGE INTO {target} AS t
+            USING _silver_in AS s
+              ON {on} AND t.valid_from = s.valid_from
+            WHEN MATCHED AND (NOT (t.valid_to <=> s.valid_to) OR t._row_hash <> s._row_hash) THEN UPDATE SET *
+            WHEN NOT MATCHED THEN INSERT *""").first()
+        out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
+    save_state(spark, cfg, table, mark)
+    return out
+ 
+ 
+def load_table(spark, cfg, table, spec):
+    return (load_scd2 if spec.get("mode") == "scd2" else load_latest)(spark, cfg, table, spec)
+ 
  
