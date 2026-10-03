@@ -1,0 +1,26 @@
+# Personal data rules for BHG (Phase 4 design, section 9). This one file drives every mask.
+# A person in a "clear" group sees real values. Everyone else sees the masked value.
+clear:
+  dev:  [lh_management, lh_developer, lh_teamlead, lh_manager]   # synthetic data; these roles run the pipeline here
+  test: [lh_management]
+  prod: [lh_management]
+pipeline: {test: sp_bhg_test, prod: sp_bhg_prod}                 # job accounts, always see real values
+
+layers: [bronze, silver]                                         # gold is added in step 5.5
+
+# mask types:  last4   = only the last 4 characters shown
+#              initial = first letter, then ***
+#              hide    = nothing shown (works for text, dates and numbers)
+#              token   = same input gives the same code, so joins and counts still work
+personal:                    # silver column names; the bronze name is taken from config/silver.yml
+  patients: {aadhaar: last4, full_name: initial, phone: hide, dob: hide, id_fingerprint: token}
+  doctors:  {full_name: initial, phone: hide}
+  payments: {payment_ref: token}
+
+technical: [raw_row, _rescued_data, content]      # hold a whole source row or file: hidden in every table that has them
+
+ids:                         # person and transaction ids: shown as tokens in the listed environments
+  environments: [test, prod]
+  columns: [patient_id, doctor_id, appt_id, admission_id, treatment_id, sale_id, invoice_id, payment_id, claim_id]
+
+  
