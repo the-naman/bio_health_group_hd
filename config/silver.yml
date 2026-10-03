@@ -1,0 +1,189 @@
+# Silver rules, one entry per table.
+# key      : columns that identify one row
+# order    : column that decides the latest version of a row
+# mode     : latest = keep one row per key | scd2 = keep history
+# columns  : silver_name: type            (same name in bronze)
+#            silver_name: [type, Source]  (renamed from the bronze column "Source")
+#   types  : string | name | city | phone | gender | aadhaar | code (trim + lower case)
+#            int | decimal | date | timestamp
+# allowed  : values a column may hold (checked after cleaning)
+# parents  : column: parent table (row waits in quarantine if the parent is missing; empty value is fine)
+# delete   : bronze column and value that mark a deleted row
+tables:
+  hospitals:
+    key: [hospital_id]
+    order: last_modified
+    mode: latest
+    columns:
+      hospital_id: string
+      hospital_name: string
+      city: city
+      state: string
+      beds: int
+      opened_date: date
+      last_modified: timestamp
+
+  departments:
+    key: [dept_id]
+    order: last_modified
+    mode: latest
+    parents: {hospital_id: hospitals}
+    columns:
+      dept_id: string
+      hospital_id: string
+      dept_name: string
+      specialty: string
+      last_modified: timestamp
+
+  doctors:
+    key: [doctor_id]
+    order: last_modified
+    mode: scd2
+    parents: {dept_id: departments}
+    allowed: {status: [active, on_leave]}
+    delete: {column: is_deleted, value: "1"}
+    columns:
+      doctor_id: string
+      dept_id: string
+      full_name: name
+      specialty: string
+      phone: phone
+      joining_date: date
+      status: code
+      last_modified: [timestamp, updated_at]
+
+  patients:
+    key: [patient_id]
+    order: last_modified
+    mode: scd2
+    columns:
+      patient_id: string
+      aadhaar: aadhaar
+      full_name: name
+      gender: gender
+      dob: date
+      phone: phone
+      city: city
+      insurance_provider: string
+      last_modified: timestamp
+
+  appointments:
+    key: [appt_id]
+    order: last_modified
+    mode: latest
+    parents: {patient_id: patients, doctor_id: doctors}
+    allowed: {status: [completed, cancelled, no_show]}
+    columns:
+      appt_id: string
+      patient_id: string
+      doctor_id: string
+      appt_ts: timestamp
+      status: code
+      consult_fee: decimal
+      last_modified: timestamp
+
+  admissions:
+    key: [admission_id]
+    order: last_modified
+    mode: latest
+    parents: {patient_id: patients, hospital_id: hospitals, dept_id: departments, doctor_id: doctors}
+    allowed:
+      ward_type: [general, semi-private, private, icu]
+      status: [admitted, discharged]
+    columns:
+      admission_id: string
+      patient_id: string
+      hospital_id: string
+      dept_id: string
+      doctor_id: string
+      admit_ts: timestamp
+      discharge_ts: timestamp
+      ward_type: code
+      status: code
+      last_modified: timestamp
+
+  treatments:
+    key: [treatment_id]
+    order: last_modified
+    mode: latest
+    parents: {admission_id: admissions, doctor_id: doctors}
+    columns:
+      treatment_id: string
+      admission_id: string
+      doctor_id: string
+      procedure_code: string
+      procedure_name: string
+      treatment_date: date
+      cost: decimal
+      last_modified: timestamp
+
+  pharmacy_sales:
+    key: [sale_id]
+    order: last_modified
+    mode: latest
+    parents: {hospital_id: hospitals, patient_id: patients}
+    columns:
+      sale_id: string
+      hospital_id: string
+      patient_id: string
+      drug_code: string
+      drug_name: string
+      qty: int
+      unit_price: decimal
+      sale_ts: timestamp
+      last_modified: timestamp
+
+  invoices:
+    key: [invoice_id]
+    order: last_modified
+    mode: latest
+    parents: {patient_id: patients, admission_id: admissions, appt_id: appointments}
+    allowed:
+      payer_type: [self, insurance, fqf_loan]
+      status: [unpaid, paid]
+    columns:
+      invoice_id: string
+      patient_id: string
+      admission_id: string
+      appt_id: string
+      invoice_date: date
+      gross_amt: decimal
+      discount_amt: decimal
+      tax_amt: decimal
+      net_amt: decimal
+      payer_type: code
+      status: code
+      last_modified: timestamp
+
+  payments:
+    key: [payment_id]
+    order: last_modified
+    mode: latest
+    parents: {invoice_id: invoices}
+    allowed: {mode: [upi, card, cash, netbanking, insurance, fqf_loan]}
+    columns:
+      payment_id: string
+      invoice_id: string
+      pay_date: date
+      amount: decimal
+      mode: code
+      payment_ref: string
+      last_modified: timestamp
+
+  insurance_claims:
+    key: [claim_id]
+    order: last_modified
+    mode: latest
+    parents: {invoice_id: invoices, patient_id: patients}
+    allowed: {status: [submitted, approved, rejected]}
+    delete: {column: IsDeleted, value: "true"}
+    columns:
+      claim_id: [string, Id]
+      invoice_id: [string, Invoice__c]
+      patient_id: [string, Patient__c]
+      insurer: [string, Insurer__c]
+      claim_amount: [decimal, ClaimAmount__c]
+      approved_amount: [decimal, ApprovedAmount__c]
+      status: [code, Status__c]
+      submitted_date: [date, SubmittedDate__c]
+      last_modified: [timestamp, LastModifiedDate]
