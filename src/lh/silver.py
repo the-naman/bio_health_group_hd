@@ -1,11 +1,13 @@
 """Silver: cleaning rules as Spark column expressions (no Python UDFs, safe in ANSI mode).
- 
+
 Every cleaner takes a text column and returns a clean column; a value that cannot be
 read becomes NULL, never an error. apply() runs the cleaners named in config/silver.yml
 and adds `_bad`: the list of columns that had a value which could not be read.
- 
+
 Rules then decide what happens to a row (split_and_log):
+  not_prepared (a prepare step could not make sense of the row or file)  -> row goes to silver.quarantine
   missing_key, unreadable_value (number, date, code), value_not_allowed -> row goes to silver.quarantine
+  date_order (a date that must not be before another one is)            -> row goes to silver.quarantine
   too_late (daily files only: the change is older than late_days)       -> row goes to silver.quarantine
   orphan (the parent row is missing)                                    -> row waits in silver.quarantine and is
         tried again on every run; after orphan_retry_days (by business date) it is accepted with
@@ -16,12 +18,12 @@ Every rule's result is written to ops.dq_results.
 import os
 from datetime import timedelta
 from functools import reduce
- 
+
 import yaml
 from pyspark.sql import Window, functions as F
- 
+
 from lh import common
- 
+
 FAKE_NULLS = ["", "null", "n/a", "na", "none", "-"]
 CITY_ALIASES = {
     "bangalore": "Bengaluru", "blr": "Bengaluru", "bengaluru": "Bengaluru",
@@ -45,84 +47,90 @@ TS_FORMATS = [(r"^\d{4}-\d{2}-\d{2} " + CLOCK, "yyyy-MM-dd HH:mm:ss"),
               (r"^\d{4}-\d{2}-\d{2}$", "yyyy-MM-dd")]
 META = ["_source_file", "_business_date", "_ingest_ts"]
 HARD = {"int", "decimal", "date", "timestamp", "code"}      # an unreadable value of these kinds quarantines the row
- 
- 
+
+
 def load_silver():
     with open(os.path.join(common.repo_root(), "config", "silver.yml")) as f:
         return yaml.safe_load(f)["tables"]
- 
- 
+
+
+def load_id_maps():
+    """Optional `id_maps` section of config/silver.yml (see build_id_map)."""
+    with open(os.path.join(common.repo_root(), "config", "silver.yml")) as f:
+        return yaml.safe_load(f).get("id_maps") or {}
+
+
 def text(c):
     """Trim, collapse spaces, turn fake nulls (NULL, N/A, -) into real NULL."""
     t = F.regexp_replace(F.trim(c), r"\s+", " ")
     return F.when(F.lower(t).isin(FAKE_NULLS), None).otherwise(t)
- 
- 
+
+
 def name(c):
     return F.initcap(text(c))
- 
- 
+
+
 def code(c):
     return F.lower(text(c))
- 
- 
+
+
 def city(c):
     lookup = F.create_map(*[F.lit(x) for pair in CITY_ALIASES.items() for x in pair])
     t = text(c)
     return F.coalesce(F.try_element_at(lookup, F.lower(t)), F.initcap(t))
- 
- 
+
+
 def phone(c):
     """10 digit Indian mobile number; +91, 91 and a leading 0 are removed."""
     d = F.regexp_replace(text(c), r"\D", "")
     d = F.when((F.length(d) == 12) & d.startswith("91"), F.substring(d, 3, 10)) \
          .when((F.length(d) == 11) & d.startswith("0"), F.substring(d, 2, 10)).otherwise(d)
     return F.when(d.rlike(r"^[6-9]\d{9}$"), d)
- 
- 
+
+
 def gender(c):
     t = code(c)
     return F.when(t.isin("m", "male"), "M").when(t.isin("f", "female"), "F").when(t.isNotNull(), "O")
- 
- 
+
+
 def aadhaar(c):
     """12 digits starting 0 or 1 (the synthetic rule of this project), else NULL."""
     d = F.regexp_replace(text(c), r"\D", "")
     return F.when(d.rlike(r"^[01]\d{11}$"), d)
- 
- 
+
+
 def integer(c):
     d = F.regexp_replace(text(c), r"[,\s]", "")
     return F.when(d.rlike(r"^-?\d{1,9}$"), d.cast("int"))
- 
- 
+
+
 def decimal(c):
     """Money as decimal(18,2); currency signs and thousands separators are removed."""
     d = F.regexp_replace(text(c), r"[^0-9.\-]", "")
     return F.when(d.rlike(r"^-?\d{1,16}(\.\d+)?$"), d.cast("decimal(18,2)"))
- 
- 
+
+
 def _parse(t, formats):
     return F.coalesce(*[F.when(t.rlike(p), F.try_to_timestamp(t, F.lit(f))) for p, f in formats])
- 
- 
+
+
 def date(c):
     t = text(c)
     t = F.when(t.rlike(r"^\d{4}-\d{2}-\d{2}[ T]"), F.substring(t, 1, 10)).otherwise(t)   # timestamp sent in a date column
     return _parse(t, DATE_FORMATS).cast("date")
- 
- 
+
+
 def timestamp(c):
     return _parse(text(c), TS_FORMATS)
- 
- 
+
+
 CLEANERS = {"string": text, "name": name, "code": code, "city": city, "phone": phone, "gender": gender,
             "aadhaar": aadhaar, "int": integer, "decimal": decimal, "date": date, "timestamp": timestamp}
- 
- 
+
+
 def apply(df, spec):
     """Bronze rows -> silver columns for one table (config entry `spec`).
- 
+
     Adds: is_deleted (from the source delete flag), _bad (columns whose value could not be read),
     _raw (the source row as JSON), and keeps the bronze metadata columns and id_fingerprint when present.
     """
@@ -139,17 +147,17 @@ def apply(df, spec):
     cols.append(F.array_compact(F.array(*bad)).alias("_bad") if bad else F.array().cast("array<string>").alias("_bad"))
     sources = [t if isinstance(r, str) else r[1] for t, r in spec["columns"].items()]
     cols.append(F.to_json(F.struct(*[F.col(f"`{c}`") for c in sources])).alias("_raw"))    # the row as the source sent it
-    keep = [c for c in META + ["id_fingerprint"] if c in df.columns]
+    keep = [c for c in META + ["id_fingerprint", "_reject"] if c in df.columns]
     return df.select(*cols, *keep)
- 
- 
+
+
 def _kinds(spec):
     return {t: (r if isinstance(r, str) else r[0]) for t, r in spec["columns"].items()}
- 
- 
-RULES = ("missing_key", "unreadable_value", "value_not_allowed", "too_late", "orphan")
- 
- 
+
+
+RULES = ("not_prepared", "missing_key", "unreadable_value", "value_not_allowed", "date_order", "too_late", "orphan")
+
+
 def check(df, spec, cfg=None):
     """Add _rule and _detail to cleaned rows: the first rule a row breaks, NULL for a good row.
     Also adds _soft: columns that were unreadable but do not block the row.
@@ -160,11 +168,14 @@ def check(df, spec, cfg=None):
     hard_bad = F.array_intersect("_bad", hard)
     need = spec["key"] + ([spec["order"]] if spec.get("mode") == "scd2" else [])    # history needs its date
     no_key = reduce(lambda a, b: a | b, [F.col(k).isNull() for k in need])
-    rules = [("missing_key", no_key, F.lit(",".join(need))),
+    rules = [("not_prepared", F.col("_reject").isNotNull(), F.col("_reject"))] if "_reject" in df.columns else []
+    rules += [("missing_key", no_key, F.lit(",".join(need))),
              ("unreadable_value", F.size(hard_bad) > 0, F.array_join(hard_bad, ","))]
     for col, values in spec.get("allowed", {}).items():
         bad = F.col(col).isNotNull() & ~F.col(col).isin([str(v) for v in values])
         rules.append(("value_not_allowed", bad, F.concat(F.lit(col + "="), F.col(col))))
+    for later, earlier in spec.get("not_before", {}).items():        # e.g. effective_to must not be before effective_from
+        rules.append(("date_order", F.col(later) < F.col(earlier), F.lit(f"{later} is before {earlier}")))
     if cfg and "_business_date" in df.columns:
         days = F.datediff("_business_date", F.to_date(spec["order"]))
         late = (F.col("_business_date") >= F.lit(str(cfg["daily_start"])).cast("date")) & (days > int(cfg["late_days"]))
@@ -174,8 +185,8 @@ def check(df, spec, cfg=None):
     return (df.withColumn("_rule", F.coalesce(*[F.when(cond, F.lit(n)) for n, cond, _ in rules]))
               .withColumn("_detail", F.coalesce(*[F.when(cond, d) for _, cond, d in rules]))
               .withColumn("_soft", F.array_except("_bad", hard)))
- 
- 
+
+
 def mark_orphans(spark, cfg, df, spec, asof):
     """Add orphan_of (the columns whose parent row is missing, NULL when all parents exist) and
     _wait (the row is still inside the retry window, counted in business days up to `asof`).
@@ -193,8 +204,8 @@ def mark_orphans(spark, cfg, df, spec, asof):
             .drop(*[f"_p_{c}" for c in names]))
     age = F.datediff(F.lit(asof), F.col("_business_date"))
     return df.withColumn("_wait", F.col("orphan_of").isNotNull() & (age <= int(cfg["orphan_retry_days"])))
- 
- 
+
+
 def ensure_tables(spark, cfg):
     cat = cfg["catalog"]
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.silver.quarantine (
@@ -204,8 +215,8 @@ def ensure_tables(spark, cfg):
         run_ts TIMESTAMP, table_name STRING, rule STRING, checked BIGINT, failed BIGINT, status STRING)""")
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.ops.silver_state (
         table_name STRING, last_ingest_ts TIMESTAMP, updated_ts TIMESTAMP)""")
- 
- 
+
+
 def to_quarantine(spark, cfg, table, bad):
     """Upsert bad rows (row_key, rule, detail, raw_row, source_file). A row already there keeps its
     first_seen and only gets a new last_seen, so a rerun never adds duplicates."""
@@ -220,8 +231,8 @@ def to_quarantine(spark, cfg, table, bad):
         WHEN MATCHED THEN UPDATE SET t.last_seen = s.seen, t.detail = s.detail
         WHEN NOT MATCHED THEN INSERT (table_name, row_key, rule, detail, raw_row, source_file, first_seen, last_seen, status)
              VALUES (s.table_name, s.row_key, s.rule, s.detail, s.raw_row, s.source_file, s.seen, s.seen, 'open')""")
- 
- 
+
+
 def split_and_log(spark, cfg, table, df, spec, asof=None):
     """Cleaned rows (from apply) -> good rows. Bad rows go to silver.quarantine, counts to ops.dq_results.
     `asof` (newest business date of the table) switches on the orphan check.
@@ -248,10 +259,10 @@ def split_and_log(spark, cfg, table, df, spec, asof=None):
                           "table_name string, rule string, checked long, failed long, status string") \
          .select(F.current_timestamp().alias("run_ts"), "*") \
          .write.mode("append").saveAsTable(f"{cfg['catalog']}.ops.dq_results")
-    good = checked.filter("_rule IS NULL").drop("_rule", "_detail", "_soft", "_bad", "_raw", "_wait")
+    good = checked.filter("_rule IS NULL").drop("_rule", "_detail", "_soft", "_bad", "_raw", "_wait", "_reject")
     return good, {"rows": n, **failed, "hold": stats["hold"]}
- 
- 
+
+
 def close_orphans(spark, cfg, table, spec):
     """Orphans of this table that have reached silver are closed in the quarantine:
     resolved = the parent arrived, accepted = the retry window ended and the row was let in."""
@@ -264,8 +275,8 @@ def close_orphans(spark, cfg, table, spec):
         WHEN MATCHED THEN UPDATE SET
           q.status = CASE WHEN s.orphan_of IS NULL THEN 'resolved' ELSE 'accepted' END,
           q.last_seen = current_timestamp()""")
- 
- 
+
+
 def _finish(spark, cfg, table, spec, mark, stats):
     """After a successful merge: close orphans that got in, then move the watermark.
     It stays just before the oldest waiting orphan, so that row is read again next run."""
@@ -274,12 +285,12 @@ def _finish(spark, cfg, table, spec, mark, stats):
     if stats["hold"] is not None:
         mark = min(mark, stats["hold"] - timedelta(microseconds=1))
     save_state(spark, cfg, table, mark)
- 
- 
+
+
 def _asof(new):
     return new.agg(F.max("_business_date")).first()[0] if "_business_date" in new.columns else None
- 
- 
+
+
 def bronze_new(spark, cfg, table):
     """Bronze rows silver has not processed yet, and the newest load time among them.
     The last processed load time per table is kept in ops.silver_state (the watermark)."""
@@ -288,8 +299,8 @@ def bronze_new(spark, cfg, table):
     if state is not None:
         df = df.filter(F.col("_ingest_ts") > F.lit(state["last_ingest_ts"]))
     return df, df.agg(F.max("_ingest_ts")).first()[0]
- 
- 
+
+
 def save_state(spark, cfg, table, mark):
     spark.createDataFrame([(table, mark)], "table_name string, last_ingest_ts timestamp") \
          .createOrReplaceTempView("_state_in")
@@ -299,14 +310,24 @@ def save_state(spark, cfg, table, mark):
         WHEN MATCHED THEN UPDATE SET t.last_ingest_ts = s.last_ingest_ts, t.updated_ts = current_timestamp()
         WHEN NOT MATCHED THEN INSERT (table_name, last_ingest_ts, updated_ts)
              VALUES (s.table_name, s.last_ingest_ts, current_timestamp())""")
- 
- 
+
+
+def prepared(spark, df, spec):
+    """A table whose bronze shape is not flat text (JSON, drifting headers, documents) names a
+    function in lh/prepare.py that turns its bronze rows into flat text columns first.
+    It may add `_reject` (a reason text): such a row goes to quarantine as not_prepared."""
+    if not spec.get("prepare"):
+        return df
+    from lh import prepare
+    return getattr(prepare, spec["prepare"])(spark, df, spec)
+
+
 def latest(df, spec):
     """One row per key: the highest order column, then the latest load."""
     w = Window.partitionBy(*spec["key"]).orderBy(F.col(spec["order"]).desc_nulls_last(), F.col("_ingest_ts").desc())
     return df.withColumn("_rn", F.row_number().over(w)).filter("_rn = 1").drop("_rn")
- 
- 
+
+
 def load_latest(spark, cfg, table, spec):
     """Bronze -> silver for a table kept as one row per key (mode: latest).
     New bronze rows are cleaned, checked, reduced to the latest row per key and merged.
@@ -316,6 +337,7 @@ def load_latest(spark, cfg, table, spec):
     new, mark = bronze_new(spark, cfg, table)
     if mark is None:
         return {"rows": 0, "quarantined": 0, "orphan_wait": 0, "orphan_accepted": 0, "inserted": 0, "updated": 0}
+    new = prepared(spark, new, spec)
     good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec, _asof(new))
     rows = latest(good, spec).withColumn("_silver_ts", F.current_timestamp())
     out = {"rows": stats["rows"], "quarantined": sum(stats[r] for r in RULES),
@@ -336,16 +358,16 @@ def load_latest(spark, cfg, table, spec):
         out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
     _finish(spark, cfg, table, spec, mark, stats)      # only after the merge: a failed run is simply repeated
     return out
- 
- 
+
+
 def tracked(spec):
     """Columns whose change makes a new history version: everything except the key and the order column."""
     return [c for c in spec["columns"] if c not in spec["key"] and c != spec["order"]] + ["is_deleted"]
- 
- 
+
+
 def scd2_chain(existing, incoming, spec):
     """Build the full version chain (SCD Type 2) for every key that has new rows.
- 
+
     existing : the silver table (or None on the first load)
     incoming : good cleaned rows from bronze
     Steps: add a hash of the tracked columns; take the stored versions of the touched keys;
@@ -372,8 +394,8 @@ def scd2_chain(existing, incoming, spec):
     return (versions.withColumn("valid_to", F.lead("valid_from").over(chain))
                     .withColumn("is_current", F.col("valid_to").isNull())
                     .drop("_new", "_had", "_rn", "_prev"))
- 
- 
+
+
 def load_scd2(spark, cfg, table, spec):
     """Bronze -> silver for a table that keeps history (mode: scd2).
     Returns {"rows", "quarantined", "orphan_wait", "orphan_accepted", "inserted", "updated"}."""
@@ -381,6 +403,7 @@ def load_scd2(spark, cfg, table, spec):
     new, mark = bronze_new(spark, cfg, table)
     if mark is None:
         return {"rows": 0, "quarantined": 0, "orphan_wait": 0, "orphan_accepted": 0, "inserted": 0, "updated": 0}
+    new = prepared(spark, new, spec)
     good, stats = split_and_log(spark, cfg, table, apply(new, spec), spec, _asof(new))
     exists = spark.catalog.tableExists(target)
     rows = scd2_chain(spark.table(target) if exists else None, good, spec) \
@@ -402,9 +425,66 @@ def load_scd2(spark, cfg, table, spec):
         out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
     _finish(spark, cfg, table, spec, mark, stats)
     return out
- 
- 
+
+
 def load_table(spark, cfg, table, spec):
     return (load_scd2 if spec.get("mode") == "scd2" else load_latest)(spark, cfg, table, spec)
- 
- 
+
+
+def build_id_map(spark, cfg, name, m):
+    """Find the same real-world entity stored under several ids and map every id to one survivor.
+
+    m = {table, key, match, first}: rows of `table` are grouped by the `match` column (for customers
+    the keyed fingerprint of the national id); the id that appeared first (`first`, then the id
+    itself) is the survivor. An id without a match value maps to itself.
+    The map <catalog>.silver.<name> is rebuilt in full on every run (small, and so rerun-safe):
+    key, survivor_id, is_survivor, group_size. Other tables are joined through it; nothing is rewritten.
+    Returns {"ids", "duplicates"}."""
+    key = m["key"]
+    per_id = (spark.table(f"{cfg['catalog']}.silver.{m['table']}").groupBy(key)
+                   .agg(F.max(m["match"]).alias("_match"), F.min(m["first"]).alias("_first")))
+    group = Window.partitionBy("_match")
+    known = F.col("_match").isNotNull()
+    out = (per_id.withColumn("survivor_id", F.when(known, F.first(key).over(group.orderBy("_first", key)))
+                                             .otherwise(F.col(key)))
+                 .withColumn("group_size", F.when(known, F.count("*").over(group)).otherwise(F.lit(1)).cast("int"))
+                 .select(key, "survivor_id", (F.col(key) == F.col("survivor_id")).alias("is_survivor"),
+                         "group_size", F.current_timestamp().alias("_silver_ts")))
+    out.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{cfg['catalog']}.silver.{name}")
+    r = spark.table(f"{cfg['catalog']}.silver.{name}").agg(
+        F.count("*").alias("ids"), F.sum((~F.col("is_survivor")).cast("int")).alias("duplicates")).first()
+    return {"ids": r["ids"], "duplicates": int(r["duplicates"] or 0)}
+
+
+def checkpoint(spark, cfg, tables, max_quarantine_pct=5.0, small_table_rows=2):
+    """The gate between silver and gold. For every table:
+      rows     : the silver table is not empty
+      unique   : one row per key (for history tables: one current row per key)
+      rejected : rows in quarantine for a broken rule (waiting orphans are not counted) stay within
+                 max_quarantine_pct of the table, with small_table_rows always allowed so that one
+                 bad row in a tiny table does not block the run
+    Prints one line per table, writes the result to ops.dq_results and returns True when all pass.
+    The runner stops with an error on False, so gold never reads a silver layer that is not sound."""
+    cat = cfg["catalog"]
+    rejected = {r["table_name"]: r["count"] for r in spark.table(f"{cat}.silver.quarantine")
+                .filter("status = 'open' AND rule <> 'orphan'").groupBy("table_name").count().collect()}
+    out, ok = [], True
+    print(f"{'table':20} {'rows':>7} {'keys':>7} {'rejected':>8} {'allowed':>7}  result")
+    for table, spec in tables.items():
+        df = spark.table(f"{cat}.silver.{table}")
+        if spec.get("mode") == "scd2":
+            df = df.filter("is_current")
+        r = df.agg(F.count("*").alias("n"), F.countDistinct(*spec["key"]).alias("k")).first()
+        bad = rejected.get(table, 0)
+        allowed = max(small_table_rows, int((r["n"] + bad) * max_quarantine_pct / 100))
+        failed = [name for name, wrong in (("rows", r["n"] == 0), ("unique", r["n"] != r["k"]), ("rejected", bad > allowed)) if wrong]
+        ok = ok and not failed
+        print(f"{table:20} {r['n']:>7} {r['k']:>7} {bad:>8} {allowed:>7}  {'FAIL ' + ','.join(failed) if failed else 'pass'}")
+        out.append((table, "checkpoint", r["n"], len(failed), "fail" if failed else "pass"))
+    spark.createDataFrame(out, "table_name string, rule string, checked long, failed long, status string") \
+         .select(F.current_timestamp().alias("run_ts"), "*") \
+         .write.mode("append").saveAsTable(f"{cat}.ops.dq_results")
+    print("SILVER CHECKPOINT", "PASS" if ok else "FAIL")
+    return ok
+
+    
