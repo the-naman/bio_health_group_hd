@@ -1,4 +1,4 @@
-# Personal data rules for BHG (Phase 4 design, section 9). This one file drives every mask.
+# Personal data rules for BHG (Phase 4 design, section 9). This one file drives every mask and row filter.
 # A person in a "clear" group sees real values. Everyone else sees the masked value.
 clear:
   dev:  [lh_management, lh_developer, lh_teamlead, lh_manager]   # synthetic data; these roles run the pipeline here
@@ -24,4 +24,9 @@ ids:                         # person and transaction ids: shown as tokens in th
   environments: [test, prod]
   columns: [patient_id, doctor_id, appt_id, admission_id, treatment_id, sale_id, invoice_id, payment_id, claim_id]
 
-  
+row_filters:                 # gold tables only. Clear groups and the job account see every row.
+  fact_bhg_event:
+    column: hospital_key     # gold key of the hospital = xxhash64(hospital_id)
+    limited:                 # group: the hospitals it may see; any group not listed sees every row
+      lh_bizmanager: [HSP01, HSP02]                              # Bengaluru and Mumbai
+
