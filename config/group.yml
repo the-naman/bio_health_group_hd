@@ -1,0 +1,16 @@
+# Group consolidation (BHG repo only). BHG Gold reads the FQF Gold of the SAME environment, read-only.
+# Data never crosses environments: FQF dev/test data never reaches BHG prod.
+source:                      # FQF catalog read by each BHG environment (only its gold schema)
+  dev:  fqf_dev
+  test: fqf_test
+  prod: fqf_prod
+
+companies:                   # rows of gold.dim_company
+  - {code: bhg, name: Bio Health Group,    role: parent, industry: healthcare}
+  - {code: fqf, name: Flexi Quant Finance, role: child,  industry: lending}
+
+intercompany:                # the same money in both companies, counted once in group totals
+  bhg_payer_type: fqf_loan   # a BHG invoice paid by an FQF loan
+  fqf_link: is_hospital_bill     # an FQF disbursement that paid that invoice (fact_fqf_event.bhg_invoice_id)
+
+  
