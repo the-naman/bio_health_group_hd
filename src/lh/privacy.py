@@ -1,4 +1,4 @@
-"""Personal data protection: Unity Catalog column masks driven by config/privacy.yml.
+"""Personal data protection: Unity Catalog column masks and row filters driven by config/privacy.yml.
 
 A mask is a SQL function attached to a column. Whoever reads the column gets the function's
 result: the real value for the groups listed under `clear`, the masked value for everyone else.
@@ -7,6 +7,9 @@ The data in the table is never changed, so the pipeline keeps working on real va
   last4   -> XXXXXXXX9012          initial -> A***
   token   -> PAY#7F3A21C4 (same input, same token: joins and counts still work)
   hide    -> NULL (one function per data type, because a mask must return the column's type)
+
+A row filter is a SQL function attached to a table. It decides per row whether the reader sees it:
+a limited group sees only the rows of its listed ids (e.g. its hospitals), everyone else every row.
 """
 import os
 import re
@@ -158,5 +161,56 @@ def apply(spark, cfg, env):
             spark.sql(f"ALTER TABLE {target} ALTER COLUMN `{r['column']}` DROP MASK")
         spark.sql(f"ALTER TABLE {target} ALTER COLUMN `{r['column']}` SET MASK {cat}.ops.{r['wanted']}")
         done["set"] += 1
+    done.update({f"rows_{k}": v for k, v in apply_row_filters(spark, cfg, env).items()})
     return done
-    
+
+
+def create_row_filter(spark, cfg, env, table, spec, prefix="rf_", clear=None):
+    """Create (or replace) the row filter function of one table and return its full name.
+    Clear groups and the job account see every row; a limited group sees only the rows whose key
+    is the gold key (xxhash64) of one of its ids; any other reader sees every row."""
+    rules = []
+    for group, ids in spec["limited"].items():
+        if not re.match(r"^[a-z_]+$", group):
+            raise ValueError(f"group name not allowed: {group}")
+        bad = [i for i in ids if not re.match(r"^[A-Za-z0-9_-]+$", i)]
+        if bad:
+            raise ValueError(f"id not allowed: {bad}")
+        keys = ", ".join(f"xxhash64('{i}')" for i in ids)
+        rules.append(f"WHEN is_account_group_member('{group}') THEN " + (f"k IN ({keys})" if ids else "FALSE"))
+    name = f"{cfg['catalog']}.ops.{prefix}{table}"
+    spark.sql(f"""
+        CREATE OR REPLACE FUNCTION {name}(k BIGINT) RETURNS BOOLEAN
+        RETURN CASE WHEN {clear_sql(spark, env, clear)} THEN TRUE {' '.join(rules)} ELSE TRUE END""")
+    return name
+
+
+def row_filters_now(spark, cat):
+    """{table: filter function name} for every row filter on a gold table."""
+    rows = spark.sql(f"""SELECT table_name, filter_name FROM {cat}.information_schema.row_filters
+                         WHERE table_schema = 'gold'""").collect()
+    return {r[0]: r[1].split(".")[-1] for r in rows}
+
+
+def apply_row_filters(spark, cfg, env):
+    """Attach the row filters of privacy.yml to the gold tables that exist. Safe to run again.
+    The function is replaced on every run, so a change in privacy.yml takes effect at once."""
+    p, cat = load(), cfg["catalog"]
+    tables = {r[0] for r in spark.sql(f"""SELECT table_name FROM {cat}.information_schema.tables
+                                          WHERE table_schema = 'gold'""").collect()}
+    have = row_filters_now(spark, cat)
+    done = {"set": 0, "kept": 0}
+    for table, spec in p.get("row_filters", {}).items():
+        if table not in tables:
+            continue
+        name = create_row_filter(spark, cfg, env, table, spec)
+        if have.get(table) == name.split(".")[-1]:
+            done["kept"] += 1
+            continue
+        target = f"{cat}.gold.{table}"
+        if table in have:
+            spark.sql(f"ALTER TABLE {target} DROP ROW FILTER")
+        spark.sql(f"ALTER TABLE {target} SET ROW FILTER {name} ON (`{spec['column']}`)")
+        done["set"] += 1
+    return done
+
