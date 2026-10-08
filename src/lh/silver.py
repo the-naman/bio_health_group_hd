@@ -8,6 +8,8 @@ Rules then decide what happens to a row (split_and_log):
   not_prepared (a prepare step could not make sense of the row or file)  -> row goes to silver.quarantine
   missing_key, unreadable_value (number, date, code), value_not_allowed -> row goes to silver.quarantine
   date_order (a date that must not be before another one is)            -> row goes to silver.quarantine
+  future_date (a business date later than the file it came in, e.g. a day/month swap; planned
+        dates such as instalment due dates are exempt)                  -> row goes to silver.quarantine
   too_late (daily files only: the change is older than late_days)       -> row goes to silver.quarantine
   orphan (the parent row is missing)                                    -> row waits in silver.quarantine and is
         tried again on every run; after orphan_retry_days (by business date) it is accepted with
@@ -155,7 +157,9 @@ def _kinds(spec):
     return {t: (r if isinstance(r, str) else r[0]) for t, r in spec["columns"].items()}
 
 
-RULES = ("not_prepared", "missing_key", "unreadable_value", "value_not_allowed", "date_order", "too_late", "orphan")
+RULES = ("not_prepared", "missing_key", "unreadable_value", "value_not_allowed", "date_order", "future_date",
+         "too_late", "orphan")
+PLANNED_DATES = {"due_date", "promise_date", "effective_to"}      # dates that are meant to lie in the future
 
 
 def check(df, spec, cfg=None):
@@ -176,6 +180,15 @@ def check(df, spec, cfg=None):
         rules.append(("value_not_allowed", bad, F.concat(F.lit(col + "="), F.col(col))))
     for later, earlier in spec.get("not_before", {}).items():        # e.g. effective_to must not be before effective_from
         rules.append(("date_order", F.col(later) < F.col(earlier), F.lit(f"{later} is before {earlier}")))
+    if "_business_date" in df.columns:                               # a file cannot report a day after its own date
+        dated = [c for c, k in kinds.items() if k in ("date", "timestamp") and c not in PLANNED_DATES
+                 and c not in spec.get("future_ok", []) and c in df.columns]
+        ahead = [F.when(F.to_date(c) > F.date_add("_business_date", 1),
+                        F.concat(F.lit(c + " "), F.to_date(c).cast("string"), F.lit(" is after the file date "),
+                                 F.col("_business_date").cast("string"))) for c in dated]
+        if ahead:
+            first = F.coalesce(*ahead)
+            rules.append(("future_date", first.isNotNull(), first))
     if cfg and "_business_date" in df.columns:
         days = F.datediff("_business_date", F.to_date(spec["order"]))
         late = (F.col("_business_date") >= F.lit(str(cfg["daily_start"])).cast("date")) & (days > int(cfg["late_days"]))
@@ -487,4 +500,3 @@ def checkpoint(spark, cfg, tables, max_quarantine_pct=5.0, small_table_rows=2):
     print("SILVER CHECKPOINT", "PASS" if ok else "FAIL")
     return ok
 
-    
