@@ -16,7 +16,7 @@ personal:                    # silver column names; the bronze name is taken fro
   patients: {aadhaar: last4, full_name: initial, phone: hide, dob: hide, id_fingerprint: token}
   doctors:  {full_name: initial, phone: hide}
   payments: {payment_ref: token}
-  dim_patient: {id_fingerprint: token}
+  dim_patient: {id_fingerprint: token, contact_fingerprint: token}
 
 technical: [raw_row, _rescued_data, content]      # hold a whole source row or file: hidden in every table that has them
 
@@ -30,3 +30,4 @@ row_filters:                 # gold tables only. Clear groups and the job accoun
     limited:                 # group: the hospitals it may see; any group not listed sees every row
       lh_bizmanager: [HSP01, HSP02]                              # Bengaluru and Mumbai
 
+      
