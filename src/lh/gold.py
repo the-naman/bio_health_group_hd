@@ -13,7 +13,10 @@ the last one to 9999-12-31, so every event finds exactly one version.
 Every Gold table is rebuilt in full from Silver on each run. Silver holds the history, so Gold
 needs none of its own, and a rerun always gives the same result.
 """
+import hashlib
+import hmac
 import os
+import re
 from functools import reduce
 
 import yaml
@@ -85,6 +88,20 @@ def build_dim_date(spark, cfg):
     return save(spark, cfg, "dim_date", dim_date(spark, g["start"], g["end"], int(g["fiscal_year_start_month"])))
 
 
+def contact_fingerprint(cat):
+    """Keyed hash of phone (last 10 digits) + date of birth, made with the same group match key as
+    id_fingerprint. Two companies can then spot the same contact details without either one
+    showing a phone number or a date of birth."""
+    key = common.match_key(cat.rsplit("_", 1)[1])          # catalog bhg_dev -> scope lh_dev
+
+    def fp(phone, dob):
+        digits = re.sub(r"\D", "", str(phone or ""))[-10:]
+        if len(digits) != 10 or dob is None:
+            return None
+        return hmac.new(key.encode(), f"{digits}|{dob.isoformat()}".encode(), hashlib.sha256).hexdigest()
+    return F.udf(fp, "string")(F.col("phone"), F.col("dob"))
+
+
 def dim_hospital(spark, cat):
     h = spark.table(f"{cat}.silver.hospitals")
     df = h.select(skey("hospital_id").alias("hospital_key"), "hospital_id", "hospital_name", "city", "state",
@@ -104,10 +121,12 @@ def dim_doctor(spark, cat):
 
 def dim_patient(spark, cat):
     """History of each patient without name, phone, national id or date of birth.
-    Age is not here: the fact carries the age band at the time of each event."""
+    Age is not here: the fact carries the age band at the time of each event.
+    contact_fingerprint lets the group spot look-alikes across companies (see group.py)."""
     p = history(spark.table(f"{cat}.silver.patients"), "patient_id")
     df = p.select(skey("patient_id", "valid_from").alias("patient_key"), "patient_id", "gender", "city",
-                  "insurance_provider", "id_fingerprint", "valid_from", "valid_to", "is_current")
+                  "insurance_provider", "id_fingerprint", contact_fingerprint(cat).alias("contact_fingerprint"),
+                  "valid_from", "valid_to", "is_current")
     return with_unknown(spark, df, "patient_key", {"patient_id": "unknown", "gender": "unknown", "city": "unknown"})
 
 
@@ -245,7 +264,7 @@ def dim_customer(spark, cat):
                    F.coalesce("master_customer_id", "customer_id").alias("master_customer_id"), "gender", "city",
                    "branch_id", income_band(F.col("monthly_income")).alias("income_band"),
                    F.coalesce("employment", F.lit("unknown")).alias("employment"), "id_fingerprint",
-                   "valid_from", "valid_to", "is_current"))
+                   contact_fingerprint(cat).alias("contact_fingerprint"), "valid_from", "valid_to", "is_current"))
     return with_unknown(spark, df, "customer_key", {"customer_id": "unknown", "master_customer_id": "unknown",
                                                     "gender": "unknown", "city": "unknown", "income_band": "unknown",
                                                     "employment": "unknown"})
@@ -357,3 +376,4 @@ def build_facts(spark, cfg):
         out[name] = save(spark, cfg, name, fact)
     return out
 
+    
