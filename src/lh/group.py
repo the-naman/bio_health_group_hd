@@ -15,6 +15,12 @@ on every run, like the company Gold tables.
                        unpaid BHG bills, against the strictest credit-policy limit of their open loans
   fact_group_kpi       one row per headline number, as of the run date
 
+Merge control (ops schema, kept across runs, never rebuilt):
+  ops.merge_log        one row per group run: how far each company's data reaches, new FQF days, status
+  ops.merge_backlog    one row per business day BHG has but FQF has not delivered yet. BHG never waits:
+                       the group is built with what FQF has; when FQF catches up, the days are merged
+                       oldest first (every run rebuilds from all FQF Gold) and marked merged.
+
 How people are matched (no names, phones or dates of birth are read, only keyed hashes):
   1. same id_fingerprint (keyed hash of Aadhaar) = same person
   2. a hospital-bill loan links the BHG patient of the invoice and the FQF customer of the loan;
@@ -23,6 +29,7 @@ How people are matched (no names, phones or dates of birth are read, only keyed 
 Look-alikes are never merged automatically.
 """
 import os
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from functools import reduce
 
@@ -247,6 +254,53 @@ def kpis(spark, out_tables):
     ]
     vals = [(k, Decimal(str(v)).quantize(Decimal("0.01"))) for k, v in rows]
     return spark.createDataFrame(vals, "kpi string, value decimal(20,2)").withColumn("as_of_date", F.current_date())
+
+
+def data_to(fact, exclude=()):
+    """Last business date a company fact holds, up to today. Planned rows (instalments due) are left
+    out, and so is any row dated in the future (a bad source date must not fake a later delivery)."""
+    today = int(date.today().strftime("%Y%m%d"))
+    k = (fact.filter(~F.col("event_type").isin(*exclude) if exclude else F.lit(True))
+             .filter(F.col("date_key") <= today).agg(F.max("date_key")).first()[0])
+    return datetime.strptime(str(k), "%Y%m%d").date() if k else None
+
+
+def merge_control(spark, cfg, env, built):
+    """Record this run in ops.merge_log and keep ops.merge_backlog up to date. Returns the log row."""
+    cat, src = cfg["catalog"], source(cfg, env)
+    spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.ops.merge_log (
+        run_ts TIMESTAMP, env STRING, bhg_data_to DATE, fqf_data_to DATE, fqf_gold_ts TIMESTAMP,
+        new_fqf_days INT, backlog_days INT, status STRING, tables STRING)""")
+    spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.ops.merge_backlog (
+        business_date DATE, first_seen TIMESTAMP, status STRING, merged_at TIMESTAMP)""")
+    ffact = spark.table(f"{src}.gold.fact_fqf_event")
+    b_to = data_to(spark.table(f"{cat}.gold.fact_bhg_event"))
+    f_to = data_to(ffact, exclude=("emi_due",))
+    f_ts = ffact.agg(F.max("_gold_ts")).first()[0]
+    prev = spark.sql(f"SELECT max_by(fqf_data_to, run_ts) FROM {cat}.ops.merge_log WHERE env = '{env}'").first()[0]
+
+    missing = [(b_to - timedelta(days=i)).isoformat() for i in range((b_to - f_to).days)] if b_to and f_to and b_to > f_to else []
+    if missing:
+        spark.createDataFrame([(d,) for d in missing], "d string").createOrReplaceTempView("_missing")
+        spark.sql(f"""MERGE INTO {cat}.ops.merge_backlog t
+                      USING (SELECT CAST(d AS DATE) AS business_date FROM _missing) s
+                      ON t.business_date = s.business_date
+                      WHEN NOT MATCHED THEN INSERT (business_date, first_seen, status, merged_at)
+                                            VALUES (s.business_date, current_timestamp(), 'waiting', NULL)""")
+    spark.sql(f"""UPDATE {cat}.ops.merge_backlog SET status = 'merged', merged_at = current_timestamp()
+                  WHERE status = 'waiting' AND business_date <= DATE'{f_to.isoformat()}'""")
+    waiting = spark.sql(f"SELECT count(*) FROM {cat}.ops.merge_backlog WHERE status = 'waiting'").first()[0]
+
+    row = {"env": env, "bhg_data_to": b_to, "fqf_data_to": f_to, "fqf_gold_ts": f_ts,
+           "new_fqf_days": (f_to - prev).days if prev and f_to else None, "backlog_days": waiting,
+           "status": "complete" if waiting == 0 else "fqf_behind", "tables": str(built)}
+    (spark.createDataFrame([row], "env string, bhg_data_to date, fqf_data_to date, fqf_gold_ts timestamp, "
+                                  "new_fqf_days int, backlog_days int, status string, tables string")
+          .withColumn("run_ts", F.current_timestamp())
+          .select("run_ts", "env", "bhg_data_to", "fqf_data_to", "fqf_gold_ts", "new_fqf_days", "backlog_days",
+                  "status", "tables")
+          .write.mode("append").saveAsTable(f"{cat}.ops.merge_log"))
+    return row
 
 
 def build(spark, cfg, env):
