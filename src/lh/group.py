@@ -9,6 +9,8 @@ on every run, like the company Gold tables.
   dim_group_customer   one row per real person across both companies
   group_match_review   pairs a person must look at: same phone + date of birth but a different
                        Aadhaar, or a hospital bill paid by a loan of a different Aadhaar
+  group_intercompany   one row per BHG invoice paid by an FQF loan: BHG payment vs FQF payout
+  fact_group_daily     one row per date, company and measure: amount, intercompany part, group amount
 
 How people are matched (no names, phones or dates of birth are read, only keyed hashes):
   1. same id_fingerprint (keyed hash of Aadhaar) = same person
@@ -144,6 +146,48 @@ def group_customers(spark, m):
     return mp, dim.unionByName(unknown)
 
 
+def intercompany(bhg, fqf, payer_type):
+    """BHG invoices paid by an FQF loan: what BHG received vs what FQF paid out, per invoice."""
+    b = (bhg("fact_bhg_event").filter("event_type = 'payment' AND invoice_id IS NOT NULL")
+         .join(bhg("dim_payer").filter(F.col("payer_type") == payer_type).select("payer_key"), "payer_key")
+         .groupBy("invoice_id").agg(F.sum("amount").alias("bhg_received"), F.min("date_key").alias("bhg_date_key")))
+    f = (fqf("fact_fqf_event").filter("event_type = 'disbursement' AND is_hospital_bill")
+         .groupBy(F.col("bhg_invoice_id").alias("invoice_id"))
+         .agg(F.sum("amount").alias("fqf_paid_out"), F.min("date_key").alias("fqf_date_key")))
+    status = (F.when(F.col("bhg_received").isNull(), "fqf_only").when(F.col("fqf_paid_out").isNull(), "bhg_only")
+               .when(F.abs(F.col("bhg_received") - F.col("fqf_paid_out")) > 0.01, "amount_differs")
+               .otherwise("matched"))
+    return (b.join(f, "invoice_id", "full_outer")
+             .select("invoice_id", "bhg_received", "bhg_date_key", "fqf_paid_out", "fqf_date_key",
+                     (F.coalesce("bhg_received", F.lit(0)) - F.coalesce("fqf_paid_out", F.lit(0))).alias("difference"),
+                     status.alias("status")))
+
+
+def daily(bhg, fqf, payer_type):
+    """Group money per day, company and measure. The intercompany part is money moving between the
+    two companies (an FQF loan paying a BHG invoice): it is real for each company, but inside the
+    group it is only a transfer, so group_amount = amount - intercompany."""
+    zero = F.lit(0).cast("decimal(18,2)")
+    t = F.col("event_type")
+    b = (bhg("fact_bhg_event").join(bhg("dim_payer").select("payer_key", "payer_type"), "payer_key", "left")
+         .select("date_key", F.lit("bhg").alias("company_code"),
+                 F.when(F.col("event_group") == "charge", "billed").when(t == "discount", "billed")
+                  .when(t == "tax", "tax").when(t == "payment", "collected").alias("measure"),
+                 F.col("amount"),
+                 F.when((t == "payment") & (F.col("payer_type") == payer_type), F.col("amount")).otherwise(zero).alias("ic")))
+    f = (fqf("fact_fqf_event")
+         .select("date_key", F.lit("fqf").alias("company_code"),
+                 F.when(t == "disbursement", "disbursed").when(t == "emi_due", "interest_due")
+                  .when(t == "repayment", "collected").when(t == "late_fee", "fees").alias("measure"),
+                 F.when(t == "emi_due", F.coalesce("interest_part", zero)).otherwise(F.col("amount")).alias("amount"),
+                 F.when((t == "disbursement") & F.col("is_hospital_bill"), F.col("amount")).otherwise(zero).alias("ic")))
+    return (b.unionByName(f).groupBy("date_key", "company_code", "measure")
+             .agg(F.count("*").alias("events"), F.sum("amount").cast("decimal(18,2)").alias("amount"),
+                  F.sum("ic").cast("decimal(18,2)").alias("intercompany"))
+             .select("date_key", gold.skey("company_code").alias("company_key"), "company_code", "measure", "events",
+                     "amount", "intercompany", (F.col("amount") - F.col("intercompany")).alias("group_amount")))
+
+
 def build(spark, cfg, env):
     """Build every group table. Returns {table: rows}."""
     grp, src = load_group(), source(cfg, env)
@@ -158,6 +202,10 @@ def build(spark, cfg, env):
     out["map_group_customer"] = gold.save(spark, cfg, "map_group_customer", mp)
     out["dim_group_customer"] = gold.save(spark, cfg, "dim_group_customer", dim)
     out["group_match_review"] = gold.save(spark, cfg, "group_match_review", review)
+
+    payer_type = grp["intercompany"]["bhg_payer_type"]
+    out["group_intercompany"] = gold.save(spark, cfg, "group_intercompany", intercompany(bhg, fqf, payer_type))
+    out["fact_group_daily"] = gold.save(spark, cfg, "fact_group_daily", daily(bhg, fqf, payer_type))
     return out
 
     
