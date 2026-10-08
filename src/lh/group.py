@@ -11,6 +11,9 @@ on every run, like the company Gold tables.
                        Aadhaar, or a hospital bill paid by a loan of a different Aadhaar
   group_intercompany   one row per BHG invoice paid by an FQF loan: BHG payment vs FQF payout
   fact_group_daily     one row per date, company and measure: amount, intercompany part, group amount
+  group_exposure       one row per person who owes the group money: FQF principal outstanding +
+                       unpaid BHG bills, against the strictest credit-policy limit of their open loans
+  fact_group_kpi       one row per headline number, as of the run date
 
 How people are matched (no names, phones or dates of birth are read, only keyed hashes):
   1. same id_fingerprint (keyed hash of Aadhaar) = same person
@@ -20,6 +23,7 @@ How people are matched (no names, phones or dates of birth are read, only keyed 
 Look-alikes are never merged automatically.
 """
 import os
+from decimal import Decimal
 from functools import reduce
 
 import yaml
@@ -188,6 +192,63 @@ def daily(bhg, fqf, payer_type):
                      "amount", "intercompany", (F.col("amount") - F.col("intercompany")).alias("group_amount")))
 
 
+def exposure(bhg, fqf, mp):
+    """What each person owes the group today, and whether it is above their credit-policy limit."""
+    person = lambda company: mp.filter(F.col("company_code") == company).select(
+        F.col("member_id"), "group_customer_key")
+    ev = fqf("fact_fqf_event")
+    owner = (ev.filter("event_type = 'disbursement' AND loan_key <> -1").select("loan_key", "customer_key").distinct()
+               .join(fqf("dim_customer").select("customer_key", F.col("master_customer_id").alias("member_id")), "customer_key")
+               .join(person("fqf"), "member_id").select("loan_key", "group_customer_key"))
+    repaid = ev.filter("event_type = 'repayment'").groupBy("loan_key").agg(F.sum("principal_part").alias("repaid"))
+    loans = (fqf("dim_loan").filter("loan_key <> -1 AND status = 'active'").join(repaid, "loan_key", "left")
+             .join(owner, "loan_key")
+             .select("group_customer_key", "loan_id", "policy_max_exposure", "dpd_bucket",
+                     F.greatest(F.col("principal") - F.coalesce("repaid", F.lit(0)), F.lit(0)).alias("outstanding")))
+    f = loans.groupBy("group_customer_key").agg(
+        F.count("*").alias("open_loans"), F.sum("outstanding").alias("fqf_outstanding"),
+        F.min("policy_max_exposure").alias("limit"),
+        F.max(F.when(F.col("dpd_bucket") != "current", 1).otherwise(0)).alias("_late"))
+    b = (bhg("fact_bhg_event").filter("invoice_id IS NOT NULL AND patient_key IS NOT NULL AND patient_key <> -1")
+         .withColumn("_signed", F.when(F.col("event_group") == "collection", -F.col("amount")).otherwise(F.col("amount")))
+         .join(bhg("dim_patient").select("patient_key", F.col("patient_id").alias("member_id")), "patient_key")
+         .groupBy("member_id").agg(F.sum("_signed").alias("unpaid"))
+         .join(person("bhg"), "member_id")
+         .groupBy("group_customer_key").agg(F.sum(F.greatest("unpaid", F.lit(0))).alias("bhg_unpaid")))
+    zero = F.lit(0).cast("decimal(18,2)")
+    total = F.coalesce("fqf_outstanding", zero) + F.coalesce("bhg_unpaid", zero)
+    return (f.join(b, "group_customer_key", "full_outer")
+             .select("group_customer_key", F.current_date().alias("as_of_date"),
+                     F.coalesce("open_loans", F.lit(0)).alias("open_loans"),
+                     F.coalesce("fqf_outstanding", zero).cast("decimal(18,2)").alias("fqf_outstanding"),
+                     F.coalesce("bhg_unpaid", zero).cast("decimal(18,2)").alias("bhg_unpaid"),
+                     total.cast("decimal(18,2)").alias("total_exposure"),
+                     F.col("limit").cast("decimal(18,2)").alias("policy_limit"),
+                     (F.col("limit").isNotNull() & (total > F.col("limit"))).alias("over_limit"),
+                     (F.coalesce("_late", F.lit(0)) == 1).alias("is_late"))
+             .filter("total_exposure > 0"))
+
+
+def kpis(spark, out_tables):
+    """Headline numbers as rows (kpi, value), so a dashboard tile is one filter."""
+    dim, review, ic, ex, daily_ = out_tables
+    one = lambda df, expr: df.agg(expr).first()[0] or 0
+    rows = [
+        ("people", one(dim.filter("group_customer_key <> -1"), F.count("*"))),
+        ("people_shared", one(dim.filter("is_shared"), F.count("*"))),
+        ("bhg_patients", one(dim.filter("is_bhg_patient"), F.count("*"))),
+        ("fqf_customers", one(dim.filter("is_fqf_customer"), F.count("*"))),
+        ("reviews_open", one(review.filter("status = 'open'"), F.count("*"))),
+        ("intercompany_breaks", one(ic.filter("status <> 'matched'"), F.count("*"))),
+        ("people_over_limit", one(ex.filter("over_limit"), F.count("*"))),
+        ("group_exposure", one(ex, F.sum("total_exposure"))),
+        ("group_billed", one(daily_.filter("company_code = 'bhg' AND measure = 'billed'"), F.sum("group_amount"))),
+        ("group_collected", one(daily_.filter("measure = 'collected'"), F.sum("group_amount"))),
+    ]
+    vals = [(k, Decimal(str(v)).quantize(Decimal("0.01"))) for k, v in rows]
+    return spark.createDataFrame(vals, "kpi string, value decimal(20,2)").withColumn("as_of_date", F.current_date())
+
+
 def build(spark, cfg, env):
     """Build every group table. Returns {table: rows}."""
     grp, src = load_group(), source(cfg, env)
@@ -206,6 +267,10 @@ def build(spark, cfg, env):
     payer_type = grp["intercompany"]["bhg_payer_type"]
     out["group_intercompany"] = gold.save(spark, cfg, "group_intercompany", intercompany(bhg, fqf, payer_type))
     out["fact_group_daily"] = gold.save(spark, cfg, "fact_group_daily", daily(bhg, fqf, payer_type))
+
+    out["group_exposure"] = gold.save(spark, cfg, "group_exposure", exposure(bhg, fqf, bhg("map_group_customer")))
+    tables = [bhg(t) for t in ("dim_group_customer", "group_match_review", "group_intercompany", "group_exposure",
+                               "fact_group_daily")]
+    out["fact_group_kpi"] = gold.save(spark, cfg, "fact_group_kpi", kpis(spark, tables))
     return out
 
-    
