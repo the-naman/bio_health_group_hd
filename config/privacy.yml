@@ -6,7 +6,7 @@ clear:
   prod: [lh_management]
 pipeline: {test: sp_bhg_test, prod: sp_bhg_prod}                 # job accounts, always see real values
 
-layers: [bronze, silver]                                         # gold is added in step 5.5
+layers: [bronze, silver, gold]                                   # gold tables get their masks in the gold runner
 
 # mask types:  last4   = only the last 4 characters shown
 #              initial = first letter, then ***
@@ -16,6 +16,7 @@ personal:                    # silver column names; the bronze name is taken fro
   patients: {aadhaar: last4, full_name: initial, phone: hide, dob: hide, id_fingerprint: token}
   doctors:  {full_name: initial, phone: hide}
   payments: {payment_ref: token}
+  dim_patient: {id_fingerprint: token}
 
 technical: [raw_row, _rescued_data, content]      # hold a whole source row or file: hidden in every table that has them
 
