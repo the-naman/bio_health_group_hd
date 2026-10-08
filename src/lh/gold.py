@@ -213,7 +213,138 @@ def fact_bhg_event(spark, cat):
     return fact, {"dim_payer": payer}
 
 
-FACTS = {"bhg": {"fact_bhg_event": fact_bhg_event}}
+def dim_branch(spark, cat):
+    b = spark.table(f"{cat}.silver.branches")
+    df = b.select(skey("branch_id").alias("branch_key"), "branch_id", "branch_name", "city", "state", "opened_date",
+                  (~F.col("is_deleted")).alias("is_active"))
+    return with_unknown(spark, df, "branch_key", {"branch_id": "unknown", "branch_name": "unknown"})
+
+
+def dim_product(spark, cat):
+    """History of each loan product: type, rate, limits."""
+    p = history(spark.table(f"{cat}.silver.loan_products"), "product_id")
+    df = p.select(skey("product_id", "valid_from").alias("product_key"), "product_id", "product_name", "loan_type",
+                  "rate_pct", "min_amt", "max_amt", "max_tenure_m", "valid_from", "valid_to", "is_current")
+    return with_unknown(spark, df, "product_key", {"product_id": "unknown", "product_name": "unknown", "loan_type": "unknown"})
+
+
+def income_band(income):
+    out = F.when(income.isNull(), "unknown")
+    for upper, label in [(25000, "<25k"), (50000, "25k-50k"), (100000, "50k-1L")]:
+        out = out.when(income < upper, label)
+    return out.otherwise("1L+")
+
+
+def dim_customer(spark, cat):
+    """History of each customer id without name, phone, national id, date of birth or exact income.
+    master_customer_id is the surviving id of the same person (duplicates merged by silver.customer_id_map)."""
+    c = history(spark.table(f"{cat}.silver.customers"), "customer_id")
+    m = spark.table(f"{cat}.silver.customer_id_map").select("customer_id", F.col("survivor_id").alias("master_customer_id"))
+    df = (c.join(m, "customer_id", "left")
+           .select(skey("customer_id", "valid_from").alias("customer_key"), "customer_id",
+                   F.coalesce("master_customer_id", "customer_id").alias("master_customer_id"), "gender", "city",
+                   "branch_id", income_band(F.col("monthly_income")).alias("income_band"),
+                   F.coalesce("employment", F.lit("unknown")).alias("employment"), "id_fingerprint",
+                   "valid_from", "valid_to", "is_current"))
+    return with_unknown(spark, df, "customer_key", {"customer_id": "unknown", "master_customer_id": "unknown",
+                                                    "gender": "unknown", "city": "unknown", "income_band": "unknown",
+                                                    "employment": "unknown"})
+
+
+def dim_loan(spark, cat):
+    """One row per loan: terms, the credit check, the credit policy in force on the application date,
+    whether it paid a BHG hospital bill, and the latest collections bucket."""
+    t = lambda name: spark.table(f"{cat}.silver.{name}").filter(~F.col("is_deleted"))
+    app = t("loan_applications").select("application_id", "applied_date", "bhg_invoice_id")
+    chk = (t("credit_checks").withColumn("_rn", F.row_number().over(
+               Window.partitionBy("application_id").orderBy(F.col("check_ts").desc())))
+           .filter("_rn = 1").select("application_id", "bureau_score", "score_band", "dti_pct"))
+    pol = t("credit_policy").select("policy_id", F.col("product_id").alias("_pp"), "effective_from",
+                                    F.col("max_dti").alias("policy_max_dti"),
+                                    F.col("min_bureau_score").alias("policy_min_bureau_score"),
+                                    F.col("max_exposure").alias("policy_max_exposure"))
+    col = (t("collections").withColumn("_rn", F.row_number().over(
+               Window.partitionBy("loan_id").orderBy(F.col("last_modified").desc())))
+           .filter("_rn = 1").select("loan_id", F.col("bucket").alias("dpd_bucket")))
+    l = t("loans").join(app, "application_id", "left").join(chk, "application_id", "left")
+    l = l.join(pol, (F.col("product_id") == F.col("_pp")) & (F.col("effective_from") <= F.col("applied_date")), "left")
+    l = (l.withColumn("_rn", F.row_number().over(Window.partitionBy("loan_id").orderBy(F.col("effective_from").desc_nulls_last())))
+          .filter("_rn = 1").join(col, "loan_id", "left"))
+    df = l.select(skey("loan_id").alias("loan_key"), "loan_id", "application_id", "principal", "rate_pct", "tenure_m",
+                  "start_date", "status", "bureau_score", "score_band", "dti_pct", "policy_id", "policy_max_dti",
+                  "policy_min_bureau_score", "policy_max_exposure",
+                  F.col("bhg_invoice_id").isNotNull().alias("is_hospital_bill"),
+                  F.coalesce("dpd_bucket", F.lit("current")).alias("dpd_bucket"))
+    return with_unknown(spark, df, "loan_key", {"loan_id": "unknown", "status": "unknown", "dpd_bucket": "unknown"})
+
+
+def fact_fqf_event(spark, cat):
+    """One row per money event on an FQF loan. Returns (fact, {}).
+
+    lending     disbursement (money paid out: to the customer or to a BHG hospital)
+    due         emi_due (each instalment that has fallen due up to today, split into principal and interest)
+    collection  repayment (instalment paid; split like the instalment it pays)
+    fee         late_fee
+    A loan that is not in silver (orphan repayment) gets key -1 for loan, customer, product and branch."""
+    t = lambda name: spark.table(f"{cat}.silver.{name}").filter(~F.col("is_deleted"))
+    emi = t("emi_schedule").select("loan_id", "emi_no", "due_date", "principal_due", "interest_due", "emi_amount")
+    rep = t("repayments").join(emi, ["loan_id", "emi_no"], "left")
+    late = F.greatest(F.datediff("paid_date", "due_date"), F.lit(0))
+    nul = F.lit(None)
+
+    def shape(df, etype, group, eid, ts, amount, principal=nul, interest=nul, dpd=nul, mode=nul, emi_no=nul, inv=nul):
+        return df.select(F.lit(etype).alias("event_type"), F.lit(group).alias("event_group"),
+                         F.col(eid).alias("event_id"), F.col(ts).cast("timestamp").alias("event_ts"), "loan_id",
+                         amount.cast("decimal(18,2)").alias("amount"),
+                         principal.cast("decimal(18,2)").alias("principal_part"),
+                         interest.cast("decimal(18,2)").alias("interest_part"),
+                         dpd.cast("int").alias("dpd_at_event"), mode.cast("string").alias("pay_mode"),
+                         emi_no.cast("int").alias("emi_no"), inv.cast("string").alias("bhg_invoice_id"))
+
+    ev = reduce(lambda x, y: x.unionByName(y), [
+        shape(t("disbursements"), "disbursement", "lending", "disb_id", "disb_date", F.col("amount"),
+              principal=F.col("amount"), inv=F.col("bhg_invoice_id")),
+        shape(emi.filter(F.col("due_date") <= F.current_date())
+                 .withColumn("_id", F.concat_ws("-", "loan_id", F.lpad(F.col("emi_no").cast("string"), 3, "0"))),
+              "emi_due", "due", "_id", "due_date", F.col("emi_amount"), F.col("principal_due"), F.col("interest_due"),
+              emi_no=F.col("emi_no")),
+        shape(rep, "repayment", "collection", "repay_id", "paid_date", F.col("amount"),
+              F.col("principal_due"), F.col("interest_due"), late, F.col("mode"), F.col("emi_no")),
+        shape(rep.filter("late_fee > 0"), "late_fee", "fee", "repay_id", "paid_date", F.col("late_fee"),
+              dpd=late, mode=F.col("mode"), emi_no=F.col("emi_no"))])
+
+    loans = spark.table(f"{cat}.silver.loans").filter(~F.col("is_deleted")).select(
+        F.col("loan_id").alias("_loan"), "customer_id", "product_id", "branch_id")
+    ev = ev.join(loans, F.col("loan_id") == F.col("_loan"), "left")
+    ev = as_of(ev, versions(spark, cat, "customers", "customer_id", "customer_key"), "customer_id", "customer_key")
+    ev = as_of(ev, versions(spark, cat, "loan_products", "product_id", "product_key"), "product_id", "product_key")
+    branches = spark.table(f"{cat}.silver.branches").select(F.col("branch_id").alias("_b"))
+    ev = ev.join(branches, F.col("branch_id") == F.col("_b"), "left")
+    found = F.col("_loan").isNotNull()
+    known = lambda c: F.when(found, F.col(c)).otherwise(F.lit(-1)).cast("bigint")
+
+    fact = ev.select(skey("event_type", "event_id").alias("event_key"), "event_id", "event_type", "event_group",
+                     F.date_format("event_ts", "yyyyMMdd").cast("int").alias("date_key"),
+                     F.when(found, skey("loan_id")).otherwise(F.lit(-1)).cast("bigint").alias("loan_key"),
+                     known("customer_key").alias("customer_key"), known("product_key").alias("product_key"),
+                     F.when(F.col("_b").isNotNull(), skey("branch_id")).otherwise(F.lit(-1)).cast("bigint").alias("branch_key"),
+                     "loan_id", "emi_no", "amount", "principal_part", "interest_part", "dpd_at_event", "pay_mode",
+                     "bhg_invoice_id", F.col("bhg_invoice_id").isNotNull().alias("is_hospital_bill"))
+    return fact, {}
+
+
+DIMENSIONS = {"bhg": {"dim_hospital": dim_hospital, "dim_doctor": dim_doctor, "dim_patient": dim_patient},
+              "fqf": {"dim_branch": dim_branch, "dim_product": dim_product, "dim_customer": dim_customer,
+                      "dim_loan": dim_loan}}
+
+
+def build_dimensions(spark, cfg):
+    """Build this company's dimensions. Returns {table: rows}."""
+    return {name: save(spark, cfg, name, fn(spark, cfg["catalog"]))
+            for name, fn in DIMENSIONS.get(cfg["code"], {}).items()}
+
+
+FACTS = {"bhg": {"fact_bhg_event": fact_bhg_event}, "fqf": {"fact_fqf_event": fact_fqf_event}}
 
 
 def build_facts(spark, cfg):
@@ -226,12 +357,3 @@ def build_facts(spark, cfg):
         out[name] = save(spark, cfg, name, fact)
     return out
 
-
-DIMENSIONS = {"bhg": {"dim_hospital": dim_hospital, "dim_doctor": dim_doctor, "dim_patient": dim_patient}}
-
-
-def build_dimensions(spark, cfg):
-    """Build this company's dimensions. Returns {table: rows}."""
-    return {name: save(spark, cfg, name, fn(spark, cfg["catalog"]))
-            for name, fn in DIMENSIONS.get(cfg["code"], {}).items()}
-    
