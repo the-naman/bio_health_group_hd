@@ -8,6 +8,11 @@ to whoever reads the view (Unity Catalog checks the reader, not the view). They 
   BHG    v_bhg_revenue_daily     day x hospital x event type x payer x age band
   FQF    v_fqf_portfolio_daily   day x product x branch x event type
          v_fqf_loan_book         loans today by status, overdue bucket, product, branch
+  health v_health_runs           last run of each job, runs and failures in the last 7 days
+         v_health_freshness      how far the company fact reaches and how many days it is behind
+         v_health_dq             latest data-quality result per table and rule
+         v_health_quarantine     rows held in quarantine per table and rule (no row keys or raw rows)
+         v_health_merge          group merge runs, newest first (BHG only)
   group  v_group_daily           day x company x measure, intercompany removed (BHG only)
          v_group_kpi             headline numbers
          v_group_exposure        people owing the group, by city and flags
@@ -82,10 +87,47 @@ VIEWS = {
 }
 
 
+FACTS = {"bhg": ("fact_bhg_event", ""), "fqf": ("fact_fqf_event", "AND event_type <> 'emi_due'")}
+
+HEALTH = {
+    "v_health_runs": """
+        WITH r AS (SELECT job, status, run_ts, rows, message,
+                          row_number() OVER (PARTITION BY job ORDER BY run_ts DESC) AS n,
+                          sum(CASE WHEN run_ts >= current_timestamp() - INTERVAL 7 DAYS THEN 1 ELSE 0 END)
+                              OVER (PARTITION BY job) AS runs_7d,
+                          sum(CASE WHEN run_ts >= current_timestamp() - INTERVAL 7 DAYS AND status <> 'success'
+                                   THEN 1 ELSE 0 END) OVER (PARTITION BY job) AS failures_7d
+                   FROM {cat}.ops.audit_runs)
+        SELECT job, status AS last_status, run_ts AS last_run, rows AS last_rows,
+               left(message, 300) AS last_message, runs_7d, failures_7d
+        FROM r WHERE n = 1""",
+    "v_health_freshness": """
+        SELECT '{fact}' AS fact, to_date(CAST(max(date_key) AS STRING), 'yyyyMMdd') AS data_to,
+               datediff(current_date(), to_date(CAST(max(date_key) AS STRING), 'yyyyMMdd')) AS days_behind,
+               max(_gold_ts) AS built_at
+        FROM {cat}.gold.{fact}
+        WHERE date_key <= CAST(date_format(current_date(), 'yyyyMMdd') AS INT) {extra}""",
+    "v_health_dq": """
+        WITH d AS (SELECT *, max(run_ts) OVER (PARTITION BY table_name) AS last_ts FROM {cat}.ops.dq_results)
+        SELECT table_name, rule, checked, failed, status, run_ts FROM d WHERE run_ts = last_ts""",
+    "v_health_quarantine": """
+        SELECT table_name, rule, status, count(*) AS rows, min(first_seen) AS oldest, max(last_seen) AS latest
+        FROM {cat}.silver.quarantine GROUP BY ALL""",
+}
+MERGE = {
+    "v_health_merge": """
+        SELECT run_ts, env, bhg_data_to, fqf_data_to, new_fqf_days, backlog_days, status
+        FROM {cat}.ops.merge_log""",
+}
+
+
 def wanted(cfg):
-    """The views this catalog gets: its own company's, plus the group views in the parent."""
+    """The views this catalog gets: its own company's and health views, plus the group views in the parent."""
+    fact, extra = FACTS[cfg["code"]]
     out = dict(VIEWS.get(cfg["code"], {}))
+    out.update({n: sql.replace("{fact}", fact).replace("{extra}", extra) for n, sql in HEALTH.items()})
     if cfg["code"] == "bhg":
+        out.update(MERGE)
         out.update(VIEWS["group"])
     return out
 
