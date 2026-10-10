@@ -1,0 +1,682 @@
+{
+  "datasets": [
+    {
+      "name": "kpi",
+      "displayName": "Group KPIs",
+      "queryLines": [
+        "SELECT max(CASE WHEN kpi = 'people' THEN value END) AS people,\n",
+        "       max(CASE WHEN kpi = 'people_shared' THEN value END) AS people_shared,\n",
+        "       max(CASE WHEN kpi = 'group_exposure' THEN value END) AS group_exposure,\n",
+        "       max(CASE WHEN kpi = 'people_over_limit' THEN value END) AS people_over_limit,\n",
+        "       max(CASE WHEN kpi = 'intercompany_breaks' THEN value END) AS intercompany_breaks,\n",
+        "       max(CASE WHEN kpi = 'reviews_open' THEN value END) AS reviews_open,\n",
+        "       max(as_of_date) AS as_of_date\n",
+        "FROM bhg_dev.gold.v_group_kpi\n"
+      ]
+    },
+    {
+      "name": "bhg_month",
+      "displayName": "BHG by month",
+      "queryLines": [
+        "SELECT year_month, measure, sum(group_amount) AS group_amount\n",
+        "FROM bhg_dev.gold.v_group_daily WHERE company_code = 'bhg' AND measure IN ('billed', 'collected')\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "fqf_month",
+      "displayName": "FQF by month",
+      "queryLines": [
+        "SELECT year_month, measure, sum(group_amount) AS group_amount\n",
+        "FROM bhg_dev.gold.v_group_daily WHERE company_code = 'fqf' AND measure IN ('disbursed', 'collected')\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "intercompany",
+      "displayName": "Intercompany by month",
+      "queryLines": [
+        "SELECT year_month, company_name, sum(intercompany) AS intercompany\n",
+        "FROM bhg_dev.gold.v_group_daily WHERE intercompany <> 0\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "exposure",
+      "displayName": "Exposure by city",
+      "queryLines": [
+        "SELECT city, CASE WHEN over_limit THEN 'over limit' ELSE 'within limit' END AS limit_status,\n",
+        "       sum(people) AS people, sum(total_exposure) AS total_exposure\n",
+        "FROM bhg_dev.gold.v_group_exposure\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "customers",
+      "displayName": "People by city",
+      "queryLines": [
+        "SELECT city, CASE WHEN is_shared THEN 'both companies'\n",
+        "                  WHEN is_bhg_patient THEN 'BHG only' ELSE 'FQF only' END AS relationship,\n",
+        "       sum(people) AS people\n",
+        "FROM bhg_dev.gold.v_group_customers\n",
+        "GROUP BY ALL\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Group overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Group overview  ·  Bio Health Group + Flexi Quant Finance\n",
+                "\n",
+                "### Intercompany money (FQF loans paying BHG bills) is removed from group amounts. Source: bhg\\_dev.gold views."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_people",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "people",
+                      "expression": "`people`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "people",
+                  "displayName": "People"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "People"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_shared",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "people_shared",
+                      "expression": "`people_shared`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "people_shared",
+                  "displayName": "Shared by both"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Shared by both"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_exposure",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "group_exposure",
+                      "expression": "`group_exposure`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "group_exposure",
+                  "displayName": "Group exposure"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Group exposure"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_over",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "people_over_limit",
+                      "expression": "`people_over_limit`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "people_over_limit",
+                  "displayName": "Over credit limit"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Over credit limit"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_breaks",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "intercompany_breaks",
+                      "expression": "`intercompany_breaks`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "intercompany_breaks",
+                  "displayName": "Intercompany breaks"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Intercompany breaks"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_reviews",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "reviews_open",
+                      "expression": "`reviews_open`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "reviews_open",
+                  "displayName": "Reviews open"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Reviews open"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_bhg",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "bhg_month",
+                  "fields": [
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
+                    },
+                    {
+                      "name": "year_month",
+                      "expression": "`year_month`"
+                    },
+                    {
+                      "name": "sum(group_amount)",
+                      "expression": "SUM(`group_amount`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "BHG billed vs collected (group view)",
+                  "fields": []
+                }
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "year_month",
+                  "displayName": "Month",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(group_amount)",
+                  "displayName": "Amount",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "measure",
+                  "displayName": "Measure",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_fqf",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "fqf_month",
+                  "fields": [
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
+                    },
+                    {
+                      "name": "year_month",
+                      "expression": "`year_month`"
+                    },
+                    {
+                      "name": "sum(group_amount)",
+                      "expression": "SUM(`group_amount`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "FQF disbursed vs collected (group view)",
+                  "fields": []
+                }
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "year_month",
+                  "displayName": "Month",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(group_amount)",
+                  "displayName": "Amount",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "measure",
+                  "displayName": "Measure",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 5,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_ic",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "intercompany",
+                  "fields": [
+                    {
+                      "name": "company_name",
+                      "expression": "`company_name`"
+                    },
+                    {
+                      "name": "year_month",
+                      "expression": "`year_month`"
+                    },
+                    {
+                      "name": "sum(intercompany)",
+                      "expression": "SUM(`intercompany`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Intercompany removed, by month",
+                  "fields": []
+                }
+              },
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "year_month",
+                  "displayName": "Month",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(intercompany)",
+                  "displayName": "Amount",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "company_name",
+                  "displayName": "Company",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_exp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "exposure",
+                  "fields": [
+                    {
+                      "name": "city",
+                      "expression": "`city`"
+                    },
+                    {
+                      "name": "limit_status",
+                      "expression": "`limit_status`"
+                    },
+                    {
+                      "name": "sum(total_exposure)",
+                      "expression": "SUM(`total_exposure`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "city",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "City"
+                },
+                "y": {
+                  "fieldName": "sum(total_exposure)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Exposure"
+                },
+                "color": {
+                  "fieldName": "limit_status",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Limit"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Exposure by city"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_cust",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "customers",
+                  "fields": [
+                    {
+                      "name": "city",
+                      "expression": "`city`"
+                    },
+                    {
+                      "name": "relationship",
+                      "expression": "`relationship`"
+                    },
+                    {
+                      "name": "sum(people)",
+                      "expression": "SUM(`people`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "city",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "City"
+                },
+                "y": {
+                  "fieldName": "sum(people)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "People"
+                },
+                "color": {
+                  "fieldName": "relationship",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Relationship"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "People by city and relationship"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
