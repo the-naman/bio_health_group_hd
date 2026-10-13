@@ -1,0 +1,818 @@
+{
+  "datasets": [
+    {
+      "name": "kpi",
+      "displayName": "Headline numbers",
+      "queryLines": [
+        "SELECT hospital,\n",
+        "       sum(CASE WHEN event_group IN ('charge', 'adjustment') THEN amount ELSE 0 END) AS billed,\n",
+        "       sum(CASE WHEN event_group = 'collection' THEN amount ELSE 0 END) AS collected,\n",
+        "       sum(CASE WHEN event_group IN ('charge', 'adjustment') THEN amount ELSE 0 END)\n",
+        "         - sum(CASE WHEN event_group = 'collection' THEN amount ELSE 0 END) AS unpaid,\n",
+        "       sum(CASE WHEN event_type = 'consult' THEN events ELSE 0 END) AS consults,\n",
+        "       sum(CASE WHEN event_type = 'room' THEN events ELSE 0 END) AS admissions,\n",
+        "       sum(CASE WHEN event_type = 'pharmacy' THEN events ELSE 0 END) AS pharmacy_sales\n",
+        "FROM bhg_dev.gold.v_bhg_revenue_daily\n",
+        "GROUP BY hospital\n"
+      ]
+    },
+    {
+      "name": "month",
+      "displayName": "Billed vs collected by month",
+      "queryLines": [
+        "SELECT year_month, hospital,\n",
+        "       CASE WHEN event_group = 'collection' THEN 'collected' ELSE 'billed' END AS measure,\n",
+        "       sum(amount) AS amount\n",
+        "FROM bhg_dev.gold.v_bhg_revenue_daily\n",
+        "WHERE date <= (SELECT CASE WHEN max(date) = last_day(max(date)) THEN max(date)\n",
+        "                           ELSE last_day(add_months(max(date), -1)) END FROM bhg_dev.gold.v_bhg_revenue_daily)   -- complete months only\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "hosp",
+      "displayName": "By hospital",
+      "queryLines": [
+        "SELECT hospital,\n",
+        "       sum(CASE WHEN event_group IN ('charge', 'adjustment') THEN amount ELSE 0 END) AS billed,\n",
+        "       sum(CASE WHEN event_group = 'collection' THEN amount ELSE 0 END) AS collected,\n",
+        "       round(100 * try_divide(sum(CASE WHEN event_group = 'collection' THEN amount ELSE 0 END),\n",
+        "                              sum(CASE WHEN event_group IN ('charge', 'adjustment') THEN amount ELSE 0 END)), 1) AS collection_pct\n",
+        "FROM bhg_dev.gold.v_bhg_revenue_daily\n",
+        "GROUP BY hospital\n"
+      ]
+    },
+    {
+      "name": "mix",
+      "displayName": "Charges by type",
+      "queryLines": [
+        "SELECT hospital, event_type, sum(amount) AS amount\n",
+        "FROM bhg_dev.gold.v_bhg_revenue_daily WHERE event_group = 'charge'\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "payer",
+      "displayName": "Billed by payer type",
+      "queryLines": [
+        "SELECT hospital, payer_type, sum(amount) AS amount\n",
+        "FROM bhg_dev.gold.v_bhg_revenue_daily WHERE event_group IN ('charge', 'adjustment')\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "age",
+      "displayName": "Billed by age band",
+      "queryLines": [
+        "SELECT hospital, age_band, sum(amount) AS amount\n",
+        "FROM bhg_dev.gold.v_bhg_revenue_daily WHERE event_group IN ('charge', 'adjustment')\n",
+        "GROUP BY ALL\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "hospitals",
+      "displayName": "BHG hospitals",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## BHG hospitals  \u00b7  Bio Health Group\n\n",
+                "Billed = charges + tax - discount. Collected = payments. Source: bhg_dev.gold.v_bhg_revenue_daily."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f_hospital",
+            "queries": [
+              {
+                "name": "f_kpi",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_month",
+                "query": {
+                  "datasetName": "month",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_hosp",
+                "query": {
+                  "datasetName": "hosp",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_mix",
+                "query": {
+                  "datasetName": "mix",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_payer",
+                "query": {
+                  "datasetName": "payer",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_age",
+                "query": {
+                  "datasetName": "age",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "hospital",
+                    "displayName": "Hospital",
+                    "queryName": "f_kpi"
+                  },
+                  {
+                    "fieldName": "hospital",
+                    "displayName": "Hospital",
+                    "queryName": "f_month"
+                  },
+                  {
+                    "fieldName": "hospital",
+                    "displayName": "Hospital",
+                    "queryName": "f_hosp"
+                  },
+                  {
+                    "fieldName": "hospital",
+                    "displayName": "Hospital",
+                    "queryName": "f_mix"
+                  },
+                  {
+                    "fieldName": "hospital",
+                    "displayName": "Hospital",
+                    "queryName": "f_payer"
+                  },
+                  {
+                    "fieldName": "hospital",
+                    "displayName": "Hospital",
+                    "queryName": "f_age"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Hospital"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_billed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "sum(billed)",
+                      "expression": "SUM(`billed`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(billed)",
+                  "displayName": "Billed"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Billed"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_collected",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "sum(collected)",
+                      "expression": "SUM(`collected`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(collected)",
+                  "displayName": "Collected"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Collected"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_unpaid",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "sum(unpaid)",
+                      "expression": "SUM(`unpaid`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(unpaid)",
+                  "displayName": "Unpaid"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Unpaid"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_consults",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "sum(consults)",
+                      "expression": "SUM(`consults`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(consults)",
+                  "displayName": "Consultations"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consultations"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_adm",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "sum(admissions)",
+                      "expression": "SUM(`admissions`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(admissions)",
+                  "displayName": "Admissions"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Admissions"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_pharm",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi",
+                  "fields": [
+                    {
+                      "name": "sum(pharmacy_sales)",
+                      "expression": "SUM(`pharmacy_sales`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(pharmacy_sales)",
+                  "displayName": "Pharmacy sales"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Pharmacy sales"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_month",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "month",
+                  "fields": [
+                    {
+                      "name": "year_month",
+                      "expression": "`year_month`"
+                    },
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
+                    },
+                    {
+                      "name": "sum(amount)",
+                      "expression": "SUM(`amount`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "year_month",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "fieldName": "sum(amount)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Amount"
+                },
+                "color": {
+                  "fieldName": "measure",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Measure"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Billed vs collected by month (complete months)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_hosp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "hosp",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    },
+                    {
+                      "name": "sum(billed)",
+                      "expression": "SUM(`billed`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "hospital",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Hospital"
+                },
+                "y": {
+                  "fieldName": "sum(billed)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Billed"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Billed by hospital"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_pct",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "hosp",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    },
+                    {
+                      "name": "sum(collection_pct)",
+                      "expression": "SUM(`collection_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "hospital",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Hospital"
+                },
+                "y": {
+                  "fieldName": "sum(collection_pct)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Collected / billed %"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Collection % by hospital"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_mix",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "mix",
+                  "fields": [
+                    {
+                      "name": "hospital",
+                      "expression": "`hospital`"
+                    },
+                    {
+                      "name": "event_type",
+                      "expression": "`event_type`"
+                    },
+                    {
+                      "name": "sum(amount)",
+                      "expression": "SUM(`amount`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "hospital",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Hospital"
+                },
+                "y": {
+                  "fieldName": "sum(amount)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Amount"
+                },
+                "color": {
+                  "fieldName": "event_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Charge type"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Charges by type"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_payer",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "payer",
+                  "fields": [
+                    {
+                      "name": "payer_type",
+                      "expression": "`payer_type`"
+                    },
+                    {
+                      "name": "sum(amount)",
+                      "expression": "SUM(`amount`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "payer_type",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Payer type"
+                },
+                "y": {
+                  "fieldName": "sum(amount)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Amount"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Billed by payer type"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 17,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_age",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "age",
+                  "fields": [
+                    {
+                      "name": "age_band",
+                      "expression": "`age_band`"
+                    },
+                    {
+                      "name": "sum(amount)",
+                      "expression": "SUM(`amount`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "age_band",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Age band"
+                },
+                "y": {
+                  "fieldName": "sum(amount)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Amount"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Billed by patient age band"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 23,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ]
+}
