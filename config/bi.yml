@@ -1,0 +1,12 @@
+# 5.8g: where the dashboards are published and who may open them. Groups only: no people, no secrets.
+# Each viewer queries as themselves (no embedded credentials), so masks and row filters apply.
+folder: ~/lh_dashboards   # home folder of the publisher (job account in test/prod); never /Workspace/Shared
+warehouse: Serverless Starter Warehouse
+managers: [lh_management]
+viewers:
+  dev: [lh_developer, lh_teamlead, lh_manager]
+  test: [lh_developer, lh_teamlead, lh_manager, lh_bizmanager]
+  prod: [lh_developer, lh_teamlead, lh_manager, lh_bizmanager]
+
+
+  

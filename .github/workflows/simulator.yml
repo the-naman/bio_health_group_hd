@@ -1,0 +1,56 @@
+name: simulator
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment to write source files for
+        required: true
+        default: dev
+        type: choice
+        options: [dev, test, prod]
+  # Nightly run for test and prod. Switched on at go-live (step 5.13).
+  # schedule:
+  #   - cron: "0 19 * * *"   # 00:30 IST
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      envs: ${{ steps.pick.outputs.envs }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo 'envs=["test","prod"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'envs=["${{ inputs.env }}"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  simulate:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.plan.outputs.envs) }}
+    environment: ${{ matrix.env == 'dev' && 'bhg_dev' || format('bhg_sim_{0}', matrix.env) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_SIM_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SIM_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bhg_${{ matrix.env }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install libraries
+        run: pip install boto3 pillow
+      - name: Write source files
+        run: python -m simulator.run --company bhg --env ${{ matrix.env }} --s3

@@ -1,0 +1,7 @@
+# Gold layer: a star schema per company. One event fact, its dimensions, and a date dimension
+# that is built the same way in every catalog so both companies can be joined on date_key.
+dim_date:
+  start: 2025-01-01              # before the oldest history (BHG starts April 2025)
+  end: 2027-12-31
+  fiscal_year_start_month: 4     # India: the financial year runs April to March
+  

@@ -1,0 +1,17 @@
+# 5.10: promotion (same file in both repos). Code only moves dev -> test -> prod by pull request; data never moves.
+# Who approves on GitHub (environment reviewer) and who gets which notice. Roles only; addresses are GitHub secrets.
+promotion:
+  test:
+    from: dev                                   # a PR into <code>_test must come from <code>_dev
+    approver: manager
+    request: [manager, teamlead, developer]     # "approval needed"
+    result: [developer, teamlead, manager]      # "approved" / "rejected" / "checks failed"
+    deployed: [developer, teamlead, manager]    # "test updated: Git folder pulled, job redeployed, t28 passed"
+  prod:
+    from: test
+    approver: bizmanager
+    request: [bizmanager, manager, teamlead]
+    result: [developer, teamlead, manager, bizmanager]
+    deployed: [developer, teamlead, manager, bizmanager, management]
+
+    

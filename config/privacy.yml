@@ -1,0 +1,35 @@
+# Personal data rules for BHG (Phase 4 design, section 9). This one file drives every mask and row filter.
+# A person in a "clear" group sees real values. Everyone else sees the masked value.
+clear:
+  dev:  [lh_management, lh_developer, lh_teamlead, lh_manager]   # synthetic data; these roles run the pipeline here
+  test: [lh_management]
+  prod: [lh_management]
+pipeline: {test: sp_bhg_test, prod: sp_bhg_prod}                 # job accounts, always see real values
+
+layers: [bronze, silver, gold]                                   # gold tables get their masks in the gold runner
+
+# mask types:  last4   = only the last 4 characters shown
+#              initial = first letter, then ***
+#              hide    = nothing shown (works for text, dates and numbers)
+#              token   = same input gives the same code, so joins and counts still work
+personal:                    # silver column names; the bronze name is taken from config/silver.yml
+  patients: {aadhaar: last4, full_name: initial, phone: hide, dob: hide, id_fingerprint: token}
+  doctors:  {full_name: initial, phone: hide}
+  payments: {payment_ref: token}
+  dim_patient: {id_fingerprint: token, contact_fingerprint: token}
+  dim_group_customer: {id_fingerprint: token}
+
+technical: [raw_row, _rescued_data, content]      # hold a whole source row or file: hidden in every table that has them
+
+ids:                         # person and transaction ids: shown as tokens in the listed environments
+  environments: [test, prod]
+  columns: [patient_id, doctor_id, appt_id, admission_id, treatment_id, sale_id, invoice_id, payment_id, claim_id,
+            member_id, bhg_patient_id, fqf_customer_id]   # last three: group tables
+
+row_filters:                 # gold tables only. Clear groups and the job account see every row.
+  fact_bhg_event:
+    column: hospital_key     # gold key of the hospital = xxhash64(hospital_id)
+    limited:                 # group: the hospitals it may see; any group not listed sees every row
+      lh_bizmanager: [HSP01, HSP02]                              # Bengaluru and Mumbai
+
+      
