@@ -1,0 +1,57 @@
+name: deploy
+
+# 5.10: after a merge into <code>_test or <code>_prod (same file in both repos). Direct pushes are blocked by the
+# rulesets, so this only runs for an approved, merged pull request.
+#   ci/deploy.py - pull the env Git folder to the merged commit, redeploy the daily job from it, run t28_jobs
+#   notice       - Gmail to the roles in config/ci.yml: deployed, or deploy failed
+# No job run is started here: the first test run is started by hand (10g); prod starts at go-live (5.13).
+
+on:
+  push:
+    branches: ["*_test", "*_prod"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml databricks-sdk==0.143.0
+      - id: env
+        run: echo "env=${GITHUB_REF_NAME##*_}" >> "$GITHUB_OUTPUT"
+      - name: Pull Git folder, redeploy job, check it
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python ci/deploy.py --env "${{ steps.env.outputs.env }}" --sha "${{ github.sha }}"
+      - name: Mail the result
+        if: always()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_BIZMANAGER: ${{ secrets.MAIL_BIZ_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$RESULT" = "success" ]; then
+            subject="Deployed ${GITHUB_SHA::7} to $GITHUB_REF_NAME"
+            body="The $GITHUB_REF_NAME Git folder is at ${GITHUB_SHA::7}, the daily job is redeployed and t28_jobs passed."
+          else
+            subject="Deploy FAILED for $GITHUB_REF_NAME"
+            body="The deploy of ${GITHUB_SHA::7} to $GITHUB_REF_NAME failed. Details: $RUN_URL"
+          fi
+          python ci/notify.py --event deployed --env "${{ steps.env.outputs.env }}" --subject "$subject" --body "$body"
