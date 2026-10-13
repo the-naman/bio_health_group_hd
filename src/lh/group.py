@@ -64,9 +64,12 @@ DECISIONS = "ops.group_match_decisions"
 
 
 def decisions(spark, cat):
-    """Review decisions made by a person; created empty on first use, never rebuilt."""
+    """Review decisions made by a person; created empty on first use, never rebuilt.
+    The Manager records them, so lh_manager may read and write this one table in every environment
+    (granted here on each run, rerun-safe; in prod the Manager is otherwise read-only)."""
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.{DECISIONS} (
         bhg_patient_id STRING, fqf_customer_id STRING, decision STRING, decided_by STRING, decided_at TIMESTAMP)""")
+    spark.sql(f"GRANT SELECT, MODIFY ON TABLE {cat}.{DECISIONS} TO `lh_manager`")
     return spark.table(f"{cat}.{DECISIONS}").filter(F.col("decision").isin("same", "different"))
 
 
