@@ -1,0 +1,148 @@
+name: promote
+
+# 5.10: a pull request into <code>_test or <code>_prod (same file in both repos).
+#   route    - test only accepts PRs from <code>_dev, prod only from <code>_test
+#   checks   - ci/checks.py (compile, no outputs, yaml, job graph, dashboards, no email or token)
+#   approval - waits for the environment's reviewer (Manager for test, Business-user Manager for prod).
+#              Reject = this check fails = the PR cannot merge; fix on the lower branch, push, a new approval starts.
+#   notices  - Gmail to the roles in config/ci.yml (addresses are secrets, never printed)
+# The ruleset of <code>_test / <code>_prod requires route, checks and approval before merge.
+
+on:
+  pull_request:
+    branches: ["*_test", "*_prod"]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.r.outputs.code }}
+      env: ${{ steps.r.outputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml
+      - id: r
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          python - <<'EOF'
+          import os, yaml
+          code = yaml.safe_load(open("config/company.yml"))["code"]
+          base, head = os.environ["BASE"], os.environ["HEAD"]
+          env = base.removeprefix(f"{code}_")
+          rule = yaml.safe_load(open("config/ci.yml"))["promotion"].get(env)
+          if not rule or base != f"{code}_{env}":
+              print(f"::error::{base} is not a promotion branch"); raise SystemExit(1)
+          need = f"{code}_{rule['from']}"
+          if head != need:
+              print(f"::error::{base} only accepts pull requests from {need} (this one is from {head})"); raise SystemExit(1)
+          print(f"promotion {head} -> {base}, approver: {rule['approver']}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"code={code}\nenv={env}\n")
+          EOF
+
+  checks:
+    needs: route
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml
+      - run: python ci/checks.py
+
+  request:
+    needs: [route, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml
+      - name: Mail "approval needed"
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_BIZMANAGER: ${{ secrets.MAIL_BIZ_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          TITLE: ${{ github.event.pull_request.title }}
+          URL: ${{ github.event.pull_request.html_url }}
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          python ci/notify.py --event request --env "${{ needs.route.outputs.env }}" \
+            --subject "Approval needed: $HEAD -> $BASE" \
+            --body "Pull request: $TITLE
+          $URL
+          Checks passed. Open the run of this pull request and approve or reject the waiting 'approval' step.
+          Reject sends it back to $HEAD."
+
+  approval:
+    needs: [route, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ needs.route.outputs.code }}_${{ needs.route.outputs.env }}
+    steps:
+      - run: echo "Approved for ${{ github.base_ref }}"
+
+  result:
+    needs: [route, checks, approval]
+    if: always() && needs.route.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml
+      - name: Mail the result
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_BIZMANAGER: ${{ secrets.MAIL_BIZ_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          TITLE: ${{ github.event.pull_request.title }}
+          URL: ${{ github.event.pull_request.html_url }}
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+          CHECKS: ${{ needs.checks.result }}
+          APPROVAL: ${{ needs.approval.result }}
+        run: |
+          if [ "$CHECKS" != "success" ]; then
+            outcome="Checks failed"; next="Fix it on $HEAD and push; the checks run again."
+          elif [ "$APPROVAL" = "success" ]; then
+            outcome="Approved"; next="It can be merged now. After the merge, $BASE is deployed automatically."
+          elif [ "$APPROVAL" = "cancelled" ]; then
+            echo "superseded by a newer push, no mail"; exit 0
+          else
+            outcome="Rejected"; next="It goes back to $HEAD: fix it there and push; a new approval starts."
+          fi
+          python ci/notify.py --event result --env "${{ needs.route.outputs.env }}" \
+            --subject "$outcome: $HEAD -> $BASE" \
+            --body "Pull request: $TITLE
+          $URL
+          $outcome. $next"
