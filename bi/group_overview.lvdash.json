@@ -20,6 +20,8 @@
       "queryLines": [
         "SELECT year_month, measure, sum(group_amount) AS group_amount\n",
         "FROM bhg_dev.gold.v_group_daily WHERE company_code = 'bhg' AND measure IN ('billed', 'collected')\n",
+        "  AND date <= (SELECT CASE WHEN max(date) = last_day(max(date)) THEN max(date)\n",
+        "                           ELSE last_day(add_months(max(date), -1)) END FROM bhg_dev.gold.v_group_daily)   -- complete months only\n",
         "GROUP BY ALL\n"
       ]
     },
@@ -29,6 +31,8 @@
       "queryLines": [
         "SELECT year_month, measure, sum(group_amount) AS group_amount\n",
         "FROM bhg_dev.gold.v_group_daily WHERE company_code = 'fqf' AND measure IN ('disbursed', 'collected')\n",
+        "  AND date <= (SELECT CASE WHEN max(date) = last_day(max(date)) THEN max(date)\n",
+        "                           ELSE last_day(add_months(max(date), -1)) END FROM bhg_dev.gold.v_group_daily)   -- complete months only\n",
         "GROUP BY ALL\n"
       ]
     },
@@ -38,6 +42,8 @@
       "queryLines": [
         "SELECT year_month, company_name, sum(intercompany) AS intercompany\n",
         "FROM bhg_dev.gold.v_group_daily WHERE intercompany <> 0\n",
+        "  AND date <= (SELECT CASE WHEN max(date) = last_day(max(date)) THEN max(date)\n",
+        "                           ELSE last_day(add_months(max(date), -1)) END FROM bhg_dev.gold.v_group_daily)   -- complete months only\n",
         "GROUP BY ALL\n"
       ]
     },
@@ -73,9 +79,9 @@
             "name": "title",
             "multilineTextboxSpec": {
               "lines": [
-                "# Group overview  ·  Bio Health Group + Flexi Quant Finance\n",
+                "## Group overview  ·  Bio Health Group + Flexi Quant Finance\n",
                 "\n",
-                "### Intercompany money (FQF loans paying BHG bills) is removed from group amounts. Source: bhg\\_dev.gold views."
+                "#### Intercompany money (FQF loans paying BHG bills) is removed from group amounts. Source: bhg\\_dev.gold views."
               ]
             }
           },
@@ -336,12 +342,12 @@
                   "datasetName": "bhg_month",
                   "fields": [
                     {
-                      "name": "measure",
-                      "expression": "`measure`"
-                    },
-                    {
                       "name": "year_month",
                       "expression": "`year_month`"
+                    },
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
                     },
                     {
                       "name": "sum(group_amount)",
@@ -353,40 +359,34 @@
               }
             ],
             "spec": {
-              "frame": {
-                "showTitle": true,
-                "title": {
-                  "value": "BHG billed vs collected (group view)",
-                  "fields": []
-                }
-              },
               "version": 3,
               "widgetType": "line",
               "encodings": {
                 "x": {
                   "fieldName": "year_month",
-                  "displayName": "Month",
                   "scale": {
                     "type": "categorical"
-                  }
+                  },
+                  "displayName": "Month"
                 },
                 "y": {
                   "fieldName": "sum(group_amount)",
-                  "displayName": "Amount",
                   "scale": {
                     "type": "quantitative"
-                  }
+                  },
+                  "displayName": "Amount"
                 },
                 "color": {
                   "fieldName": "measure",
-                  "displayName": "Measure",
                   "scale": {
                     "type": "categorical"
-                  }
+                  },
+                  "displayName": "Measure"
                 }
               },
-              "data": {
-                "queryName": "main_query"
+              "frame": {
+                "showTitle": true,
+                "title": "BHG billed vs collected (group view, complete months)"
               }
             }
           },
@@ -407,12 +407,12 @@
                   "datasetName": "fqf_month",
                   "fields": [
                     {
-                      "name": "measure",
-                      "expression": "`measure`"
-                    },
-                    {
                       "name": "year_month",
                       "expression": "`year_month`"
+                    },
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
                     },
                     {
                       "name": "sum(group_amount)",
@@ -424,40 +424,34 @@
               }
             ],
             "spec": {
-              "frame": {
-                "showTitle": true,
-                "title": {
-                  "value": "FQF disbursed vs collected (group view)",
-                  "fields": []
-                }
-              },
               "version": 3,
               "widgetType": "line",
               "encodings": {
                 "x": {
                   "fieldName": "year_month",
-                  "displayName": "Month",
                   "scale": {
                     "type": "categorical"
-                  }
+                  },
+                  "displayName": "Month"
                 },
                 "y": {
                   "fieldName": "sum(group_amount)",
-                  "displayName": "Amount",
                   "scale": {
                     "type": "quantitative"
-                  }
+                  },
+                  "displayName": "Amount"
                 },
                 "color": {
                   "fieldName": "measure",
-                  "displayName": "Measure",
                   "scale": {
                     "type": "categorical"
-                  }
+                  },
+                  "displayName": "Measure"
                 }
               },
-              "data": {
-                "queryName": "main_query"
+              "frame": {
+                "showTitle": true,
+                "title": "FQF disbursed vs collected (group view, complete months)"
               }
             }
           },
@@ -478,12 +472,12 @@
                   "datasetName": "intercompany",
                   "fields": [
                     {
-                      "name": "company_name",
-                      "expression": "`company_name`"
-                    },
-                    {
                       "name": "year_month",
                       "expression": "`year_month`"
+                    },
+                    {
+                      "name": "company_name",
+                      "expression": "`company_name`"
                     },
                     {
                       "name": "sum(intercompany)",
@@ -495,40 +489,34 @@
               }
             ],
             "spec": {
-              "frame": {
-                "showTitle": true,
-                "title": {
-                  "value": "Intercompany removed, by month",
-                  "fields": []
-                }
-              },
               "version": 3,
               "widgetType": "line",
               "encodings": {
                 "x": {
                   "fieldName": "year_month",
-                  "displayName": "Month",
                   "scale": {
                     "type": "categorical"
-                  }
+                  },
+                  "displayName": "Month"
                 },
                 "y": {
                   "fieldName": "sum(intercompany)",
-                  "displayName": "Amount",
                   "scale": {
                     "type": "quantitative"
-                  }
+                  },
+                  "displayName": "Amount"
                 },
                 "color": {
                   "fieldName": "company_name",
-                  "displayName": "Company",
                   "scale": {
                     "type": "categorical"
-                  }
+                  },
+                  "displayName": "Company"
                 }
               },
-              "data": {
-                "queryName": "main_query"
+              "frame": {
+                "showTitle": true,
+                "title": "Intercompany removed, by month (complete months)"
               }
             }
           },
