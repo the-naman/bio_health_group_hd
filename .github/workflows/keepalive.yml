@@ -1,0 +1,33 @@
+name: keepalive
+
+# GitHub disables scheduled workflows after 60 days without repo activity.
+# Once a month this re-enables every workflow in the repo (itself included) via the API.
+# No commits, no secrets: only the built-in token with actions:write.
+
+on:
+  schedule:
+    - cron: "17 3 1 * *"        # 1st of every month, 08:47 IST
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Re-enable every workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api "repos/$REPO/actions/workflows" --paginate \
+                --jq '.workflows[] | select(.path | startswith(".github/workflows/")) | .id')
+          for id in $ids; do
+            gh api -X PUT "repos/$REPO/actions/workflows/$id/enable" > /dev/null
+          done
+          echo "Workflow states:"
+          gh api "repos/$REPO/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.path | startswith(".github/workflows/")) | "\(.name): \(.state)"'
