@@ -4,15 +4,18 @@ build() turns the config into Jobs API settings for one company and environment:
   - tasks of other companies are dropped and their dependants rewired (FQF has no group task, so bi_views
     follows gold there)
   - every task is a notebook in that environment's own Git folder, with the env as a parameter
-  - dev: no schedule, runs as whoever deploys it; test/prod: schedule (paused until go-live) and run as the
-    environment's job account
-  - silver_rebuild runs only if silver fails; gold runs if either of them succeeded
+  - dev: one job per person (lh_<code>_dev_daily_<role>), no schedule, runs as that person from their own Git folder;
+    test/prod: schedule (paused until go-live) and run as the environment's job account
+  - silver_rebuild runs only if silver fails; masks (then gold) run if either of them succeeded
+  - failure emails (tier 1, 5.10): dev = only the person whose job it is; test/prod = the roles in notify.<env>;
+    the addresses come from the secret scope lh_<env> at deploy time
 deploy() creates or updates the job by name and sets its permissions exactly. plan mode changes nothing.
-Folder paths and job-account IDs are looked up at deploy time, so no person or ID is stored in the repo."""
+Folder paths, job-account IDs and mail addresses are looked up at deploy time, so no person or ID is stored in the repo."""
 import os
 import yaml
 
 RUN_IF = {"ALL_SUCCESS", "AT_LEAST_ONE_SUCCESS", "NONE_FAILED", "ALL_DONE", "AT_LEAST_ONE_FAILED", "ALL_FAILED"}
+ROLES = {"developer", "teamlead", "manager", "bizmanager", "management"}
 
 
 def load_jobs(root):
@@ -40,8 +43,63 @@ def tasks_for(cfg, code):
     return out
 
 
-def check(tasks, root=None):
-    """Raise if a dependency is unknown, the graph has a loop, a run_if is invalid or a notebook is missing."""
+def job_name(cfg, code, env, role=None):
+    """lh_<code>_<env>_daily; in dev one job per person: lh_<code>_dev_daily_<role>."""
+    base = cfg["name"].format(code=code, env=env)
+    if env == "dev":
+        if role not in cfg["dev_roles"].values():
+            raise ValueError(f"dev jobs belong to a role ({sorted(cfg['dev_roles'].values())}), got {role}")
+        return f"{base}_{role}"
+    return base
+
+
+def my_role(cfg, env, is_member):
+    """dev: the caller's role from their group (is_member(group) -> bool); test/prod: None."""
+    if env != "dev":
+        return None
+    roles = [r for g, r in cfg["dev_roles"].items() if is_member(g)]
+    if len(roles) != 1:
+        raise ValueError(f"dev jobs are deployed by one role login (Developer, Team Lead or Manager); found {roles or 'none'}")
+    return roles[0]
+
+
+def recipients(cfg, env, role=None):
+    """Roles that get the tier-1 failure mail: dev = the job's own person, else notify.<env>."""
+    return [role] if env == "dev" else list(cfg["notify"][env])
+
+
+def notify_plan(cfg, code, env, role=None):
+    """Roles to mail on failure: {"job": [...], "tasks": {task_key: [...]}}. No addresses here."""
+    who = recipients(cfg, env, role)
+    return {"job": who, "tasks": {t["key"]: who for t in tasks_for(cfg, code) if t.get("notify")}}
+
+
+def mail_roles(cfg, env, role=None):
+    """Roles whose address this deploy needs (= keys mail_<role> in scope lh_<env>)."""
+    return sorted(set(recipients(cfg, env, role)))
+
+
+def scope_roles(cfg, env):
+    """Every mail_<role> key scope lh_<env> must hold (dev: every role that may own a dev job)."""
+    return sorted(set(cfg["dev_roles"].values()) if env == "dev" else set(cfg["notify"][env]))
+
+
+def check(tasks, root=None, cfg=None):
+    """Raise if a dependency is unknown, the graph has a loop, a run_if is invalid, a notebook is missing
+    or a notify setting is not valid."""
+    if cfg:
+        if cfg["notify"]["dev"] != ["self"]:
+            raise ValueError("notify.dev must be [self]: in dev only the person whose job it is gets mail")
+        for env in ("test", "prod"):
+            bad = set(cfg["notify"][env]) - ROLES
+            if bad:
+                raise ValueError(f"notify.{env}: unknown role {sorted(bad)}")
+        bad = set(cfg["dev_roles"].values()) - ROLES
+        if bad:
+            raise ValueError(f"dev_roles: unknown role {sorted(bad)}")
+    for t in tasks:
+        if "notify" in t and t["notify"] is not True:
+            raise ValueError(f"{t['key']}: notify must be true or left out")
     keys = [t["key"] for t in tasks]
     if len(keys) != len(set(keys)):
         raise ValueError("duplicate task key")
@@ -63,13 +121,20 @@ def check(tasks, root=None):
             del todo[k]
 
 
-def build(cfg, code, env, home, run_as_id=None):
+def build(cfg, code, env, home, run_as_id=None, mail=None, role=None):
     """Jobs API settings for one company + environment. home = the deployer's home folder (/Users/<name>);
-    run_as_id = the job account's application id (test/prod)."""
+    run_as_id = the job account's application id (test/prod); mail = {role: address} (None = no emails);
+    role = the person's role (dev)."""
     repo = cfg["repo"][code]
     folder = f"{home}/{cfg['folder'][env].format(repo=repo)}"
     tasks = tasks_for(cfg, code)
-    check(tasks)
+    check(tasks, cfg=cfg)
+    name = job_name(cfg, code, env, role)
+    plan = notify_plan(cfg, code, env, role)
+    if mail:
+        missing = sorted(set(mail_roles(cfg, env, role)) - set(mail))
+        if missing:
+            raise ValueError(f"no mail address for {missing} (scope lh_{env}, keys mail_<role>)")
     out_tasks = []
     for t in tasks:
         task = {"task_key": t["key"],
@@ -83,13 +148,20 @@ def build(cfg, code, env, home, run_as_id=None):
             task["depends_on"] = [{"task_key": d} for d in t["after"]]
         if t.get("run_if"):
             task["run_if"] = t["run_if"]
+        if mail and t["key"] in plan["tasks"]:
+            task["email_notifications"] = {"on_failure": [mail[r] for r in plan["tasks"][t["key"]]]}
         out_tasks.append(task)
-    settings = {"name": cfg["name"].format(code=code, env=env),
-                "tags": {"project": "lh", "company": code, "env": env},
+    tags = {"project": "lh", "company": code, "env": env}
+    if env == "dev":
+        tags["owner_role"] = role
+    settings = {"name": name, "tags": tags,
                 "max_concurrent_runs": 1,
                 "timeout_seconds": cfg["job_timeout_minutes"] * 60,
                 "queue": {"enabled": True},
                 "tasks": out_tasks}
+    if mail:
+        settings["email_notifications"] = {"on_failure": [mail[r] for r in plan["job"]]}
+        settings["notification_settings"] = {"no_alert_for_skipped_runs": True, "no_alert_for_canceled_runs": True}
     if env != "dev":
         if not run_as_id:
             raise ValueError(f"{env} needs the job account's application id")
@@ -129,6 +201,18 @@ class Api:
             raise ValueError(f"{len(jobs)} jobs named {name}; remove the extra ones first")
         return jobs[0]["job_id"] if jobs else None
 
+    def list_jobs(self, prefix):
+        """[(job_id, name)] of every job this login can see whose name starts with prefix."""
+        out, token = [], None
+        while True:
+            q = {"limit": 100, **({"page_token": token} if token else {})}
+            res = self.call("GET", "/api/2.2/jobs/list", query=q)
+            out += [(j["job_id"], j["settings"]["name"]) for j in res.get("jobs", [])
+                    if j.get("settings", {}).get("name", "").startswith(prefix)]
+            token = res.get("next_page_token")
+            if not token:
+                return out
+
     def create(self, settings):
         return self.call("POST", "/api/2.2/jobs/create", body=settings)["job_id"]
 
@@ -145,27 +229,35 @@ class Api:
         return self.call("GET", f"/api/2.0/permissions/jobs/{job_id}")
 
 
-def deploy(api, cfg, root, code, env, apply=False):
-    """Create or update this company's job for env. Returns a summary row (no names of people)."""
-    check(tasks_for(cfg, code), root)
+def deploy(api, cfg, root, code, env, apply=False, mail=None, role=None):
+    """Create or update this company's job for env (dev: the caller's own job, role from my_role()).
+    mail = {role: address} read from scope lh_<env> by the notebook. Returns a summary row (no names, no addresses)."""
+    check(tasks_for(cfg, code), root, cfg)
     me = api.me()
     if env == "dev":
         run_as_id, owner = None, ("user_name", me)
     else:
         run_as_id = api.service_principal(cfg["run_as"][env].format(code=code))
         owner = ("service_principal_name", run_as_id)
-    settings = build(cfg, code, env, f"/Users/{me}", run_as_id)
+    settings = build(cfg, code, env, f"/Users/{me}", run_as_id, mail, role)
     job_id = api.find_job(settings["name"])
     action = "update" if job_id else "create"
+    if not job_id and env == "dev":
+        old = api.find_job(cfg["name"].format(code=code, env=env))     # 5.9 shared dev job becomes this person's job
+        if old:
+            job_id, action = old, "rename 5.9 dev job"
     if apply:
         if job_id:
             api.reset(job_id, settings)
         else:
             job_id = api.create(settings)
         api.set_acl(job_id, acl(cfg, env, owner))
+    plan = notify_plan(cfg, code, env, role)
     return {"job": settings["name"], "action": action, "job_id": job_id,
             "tasks": " -> ".join(t["task_key"] for t in settings["tasks"]),
-            "run_as": "deployer" if env == "dev" else cfg["run_as"][env].format(code=code),
+            "run_as": f"you ({role})" if env == "dev" else cfg["run_as"][env].format(code=code),
             "schedule": (settings["schedule"]["quartz_cron_expression"] + " " + settings["schedule"]["pause_status"])
-                        if "schedule" in settings else "on demand"}
+                        if "schedule" in settings else "on demand",
+            "notify": "; ".join([f"job: {', '.join(plan['job'])}"] + [f"{k}: {', '.join(v)}" for k, v in plan["tasks"].items()])
+                      if mail else "none"}
     
