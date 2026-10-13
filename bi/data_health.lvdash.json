@@ -1,0 +1,858 @@
+{
+  "datasets": [
+    {
+      "name": "runs",
+      "displayName": "Job runs",
+      "queryLines": [
+        "SELECT company, job, split(job, '[.]')[0] AS stage, lower(last_status) AS last_status, 1 AS jobs, last_run, runs_7d, failures_7d,\n",
+        "       CASE WHEN lower(last_status) IN ('success', 'rejected') THEN 0 ELSE 1 END AS failing_now   -- rejected = bad file set aside, not a crash\n",
+        "FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_runs\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_runs)\n"
+      ]
+    },
+    {
+      "name": "runs_7d",
+      "displayName": "Runs in the last 7 days",
+      "queryLines": [
+        "SELECT company, split(job, '[.]')[0] AS stage, 'succeeded' AS outcome, runs_7d - failures_7d AS runs FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_runs\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_runs)\n",
+        "UNION ALL\n",
+        "SELECT company, split(job, '[.]')[0], 'not succeeded', failures_7d FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_runs\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_runs)\n"
+      ]
+    },
+    {
+      "name": "fresh",
+      "displayName": "Freshness",
+      "queryLines": [
+        "SELECT company, fact, data_to, days_behind, built_at\n",
+        "FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_freshness\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_freshness)\n"
+      ]
+    },
+    {
+      "name": "dq",
+      "displayName": "Data quality (latest check)",
+      "queryLines": [
+        "SELECT company, table_name, rule, concat(table_name, ' · ', rule) AS check_name, status, checked, failed,\n",
+        "       CASE WHEN lower(status) = 'pass' THEN 0 ELSE 1 END AS not_passing\n",
+        "FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_dq\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_dq)\n"
+      ]
+    },
+    {
+      "name": "dq_fail",
+      "displayName": "Data quality failures",
+      "queryLines": [
+        "SELECT company, concat(table_name, ' · ', rule) AS check_name, status, failed\n",
+        "FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_dq\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_dq)\n",
+        "WHERE failed > 0\n"
+      ]
+    },
+    {
+      "name": "quarantine",
+      "displayName": "Quarantine",
+      "queryLines": [
+        "SELECT company, table_name, rule, status, rows,\n",
+        "       CASE WHEN status = 'open' THEN rows ELSE 0 END AS open_rows\n",
+        "FROM (SELECT 'BHG' AS company, * FROM bhg_dev.gold.v_health_quarantine\n",
+        "UNION ALL SELECT 'FQF' AS company, * FROM fqf_dev.gold.v_health_quarantine)\n"
+      ]
+    },
+    {
+      "name": "merge",
+      "displayName": "Group merge runs",
+      "queryLines": [
+        "SELECT date_format(run_ts, 'yyyy-MM-dd HH:mm') AS run_time, 'backlog days' AS measure, backlog_days AS days\n",
+        "FROM bhg_dev.gold.v_health_merge\n",
+        "UNION ALL\n",
+        "SELECT date_format(run_ts, 'yyyy-MM-dd HH:mm'), 'new FQF days', new_fqf_days\n",
+        "FROM bhg_dev.gold.v_health_merge\n"
+      ]
+    },
+    {
+      "name": "merge_now",
+      "displayName": "Latest merge",
+      "queryLines": [
+        "SELECT backlog_days, status\n",
+        "FROM bhg_dev.gold.v_health_merge\n",
+        "ORDER BY run_ts DESC LIMIT 1\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "health",
+      "displayName": "Data health",
+      "layout": [
+        {
+          "widget": {
+            "name": "title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Data health  ·  BHG + FQF\n",
+                "\n",
+                "#### Job runs, freshness, data quality, quarantine and the group merge. Source: bhg\\_dev.gold and fqf\\_dev.gold health views."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 5,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f_company",
+            "queries": [
+              {
+                "name": "f_company_runs",
+                "query": {
+                  "datasetName": "runs",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_company_runs_7d",
+                "query": {
+                  "datasetName": "runs_7d",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_company_fresh",
+                "query": {
+                  "datasetName": "fresh",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_company_dq",
+                "query": {
+                  "datasetName": "dq",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_company_dq_fail",
+                "query": {
+                  "datasetName": "dq_fail",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_company_quarantine",
+                "query": {
+                  "datasetName": "quarantine",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "company",
+                    "displayName": "Company",
+                    "queryName": "f_company_runs"
+                  },
+                  {
+                    "fieldName": "company",
+                    "displayName": "Company",
+                    "queryName": "f_company_runs_7d"
+                  },
+                  {
+                    "fieldName": "company",
+                    "displayName": "Company",
+                    "queryName": "f_company_fresh"
+                  },
+                  {
+                    "fieldName": "company",
+                    "displayName": "Company",
+                    "queryName": "f_company_dq"
+                  },
+                  {
+                    "fieldName": "company",
+                    "displayName": "Company",
+                    "queryName": "f_company_dq_fail"
+                  },
+                  {
+                    "fieldName": "company",
+                    "displayName": "Company",
+                    "queryName": "f_company_quarantine"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Company"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "c_failing",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "runs",
+                  "fields": [
+                    {
+                      "name": "sum(failing_now)",
+                      "expression": "SUM(`failing_now`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(failing_now)",
+                  "displayName": "Jobs failing now"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Jobs failing now"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_fail7",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "runs",
+                  "fields": [
+                    {
+                      "name": "sum(failures_7d)",
+                      "expression": "SUM(`failures_7d`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(failures_7d)",
+                  "displayName": "Failures, last 7 days"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Failures, last 7 days"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_behind",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "fresh",
+                  "fields": [
+                    {
+                      "name": "max(days_behind)",
+                      "expression": "MAX(`days_behind`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(days_behind)",
+                  "displayName": "Days behind (worst)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Days behind (worst)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_dq",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "dq",
+                  "fields": [
+                    {
+                      "name": "sum(not_passing)",
+                      "expression": "SUM(`not_passing`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(not_passing)",
+                  "displayName": "DQ rules not passing"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "DQ rules not passing"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_quar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "quarantine",
+                  "fields": [
+                    {
+                      "name": "sum(open_rows)",
+                      "expression": "SUM(`open_rows`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(open_rows)",
+                  "displayName": "Rows in quarantine"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rows in quarantine"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "c_backlog",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "merge_now",
+                  "fields": [
+                    {
+                      "name": "sum(backlog_days)",
+                      "expression": "SUM(`backlog_days`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(backlog_days)",
+                  "displayName": "Merge backlog days"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Merge backlog days"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 1,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_runs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "runs_7d",
+                  "fields": [
+                    {
+                      "name": "stage",
+                      "expression": "`stage`"
+                    },
+                    {
+                      "name": "outcome",
+                      "expression": "`outcome`"
+                    },
+                    {
+                      "name": "sum(runs)",
+                      "expression": "SUM(`runs`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "stage",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Stage"
+                },
+                "y": {
+                  "fieldName": "sum(runs)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Runs"
+                },
+                "color": {
+                  "fieldName": "outcome",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Outcome"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Runs in the last 7 days"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 2,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_last",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "runs",
+                  "fields": [
+                    {
+                      "name": "stage",
+                      "expression": "`stage`"
+                    },
+                    {
+                      "name": "last_status",
+                      "expression": "`last_status`"
+                    },
+                    {
+                      "name": "sum(jobs)",
+                      "expression": "SUM(`jobs`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "stage",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Stage"
+                },
+                "y": {
+                  "fieldName": "sum(jobs)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Jobs"
+                },
+                "color": {
+                  "fieldName": "last_status",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Last status"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Jobs by last status"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 5,
+            "width": 2,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_fresh",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "fresh",
+                  "fields": [
+                    {
+                      "name": "company",
+                      "expression": "`company`"
+                    },
+                    {
+                      "name": "sum(days_behind)",
+                      "expression": "SUM(`days_behind`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "company",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Company"
+                },
+                "y": {
+                  "fieldName": "sum(days_behind)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Days"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Days behind today"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 5,
+            "width": 2,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_dq",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "dq_fail",
+                  "fields": [
+                    {
+                      "name": "check_name",
+                      "expression": "`check_name`"
+                    },
+                    {
+                      "name": "sum(failed)",
+                      "expression": "SUM(`failed`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "check_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Table · rule"
+                },
+                "y": {
+                  "fieldName": "sum(failed)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Rows"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Data-quality rules with failing rows (latest check; empty = all pass)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_quar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "quarantine",
+                  "fields": [
+                    {
+                      "name": "table_name",
+                      "expression": "`table_name`"
+                    },
+                    {
+                      "name": "rule",
+                      "expression": "`rule`"
+                    },
+                    {
+                      "name": "sum(open_rows)",
+                      "expression": "SUM(`open_rows`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "table_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Table"
+                },
+                "y": {
+                  "fieldName": "sum(open_rows)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Rows"
+                },
+                "color": {
+                  "fieldName": "rule",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Rule"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rows in quarantine by table"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 11,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_merge",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "merge",
+                  "fields": [
+                    {
+                      "name": "run_time",
+                      "expression": "`run_time`"
+                    },
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
+                    },
+                    {
+                      "name": "sum(days)",
+                      "expression": "SUM(`days`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "run_time",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Run"
+                },
+                "y": {
+                  "fieldName": "sum(days)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Days"
+                },
+                "color": {
+                  "fieldName": "measure",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Measure"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Group merge: backlog and new FQF days per run"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
