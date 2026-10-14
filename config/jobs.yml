@@ -32,9 +32,12 @@ notify:
   dev: [self]                               # only the person whose dev job it is
   test: [developer, teamlead, manager]      # the team under the Manager
   prod: [developer, teamlead, manager]      # the fixers
-# 5.10: tier 2 = plain-language business notice ("today's figures are delayed" / "up to date again"), prod only, only
-# when Gold, group or publish failed. Sent by a GitHub workflow from the MAIL_* secrets (step 10e), not by Databricks.
+# 5.10/10e: tier 2 = plain-language business notice, sent by .github/workflows/notices.yml (ci/notices.py) from the
+# MAIL_* secrets, not by Databricks: "today's figures are delayed" when a task below did not finish, "up to date again"
+# after the next good run, and (BHG) what was merged from FQF into the group figures. Each notice is sent once.
+# prod = everyone; test = the team under the Manager, only for trying the notices by hand.
 business_notice:
-  prod: [developer, teamlead, manager, management, bizmanager]
-
-  
+  tasks: [gold, group, bi_views, publish]
+  roles:
+    prod: [developer, teamlead, manager, management, bizmanager]
+    test: [developer, teamlead, manager]
