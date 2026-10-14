@@ -4,6 +4,7 @@ name: notices
 # daily run went and mails the business roles in plain language (ci/notices.py):
 #   "today's figures are delayed" / "figures are up to date again" and, in BHG, "what FQF data was merged".
 # Each notice is sent once (recorded in <catalog>.ops.notice_log). Technical failure mails come from Databricks.
+# Databricks access: service principal sp_lh_notices (group lh_ci, read-only grants from setup_once/01_grant_access).
 # By hand: Actions -> notices -> Run workflow; choose env and dry run (dry run = print only, send nothing).
 
 on:
@@ -41,7 +42,8 @@ jobs:
       - name: Check the last run and the group merge, send what is new
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.LH_NOTICES_CLIENT_ID }}          # service principal sp_lh_notices (group lh_ci):
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.LH_NOTICES_CLIENT_SECRET }}  # read-only, never the admin token
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
           MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
