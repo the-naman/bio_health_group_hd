@@ -1,6 +1,6 @@
-"""10e: business notices by Gmail (same file in both repos). Run by .github/workflows/notices.yml every two hours, with
-the admin token (DATABRICKS_HOST / DATABRICKS_TOKEN) and the MAIL_* secrets. Nothing is sent twice: every notice is
-recorded in <catalog>.ops.notice_log, and only a notice that is not recorded yet goes out.
+"""10e: business notices by Gmail (same file in both repos). Run by .github/workflows/notices.yml every two hours as
+service principal sp_lh_notices (group lh_ci, OAuth client id/secret, read-only grants) with the MAIL_* secrets.
+Nothing is sent twice: every notice is recorded in <catalog>.ops.notice_log, and only a notice not recorded yet goes out.
 
   delayed    the last finished daily run did not complete Gold, group, BI views or publish -> "today's figures are
              delayed" (once per run)
@@ -155,7 +155,8 @@ if code == "bhg":
         if not a.sample and sent("merge", run_ts):
             continue
         end = datetime.strptime(f_to, "%Y-%m-%d").date() if f_to else date.today()
-        days = max(int(new_days or 1), 1)
+        new = int(new_days or 0)            # 0 only in --sample: the latest group run found no new FQF day
+        days = max(new, 1)
         start = end - timedelta(days=days - 1)
         fig = {m: (n, amt, ic) for m, n, amt, ic in sql(
             """SELECT measure, CAST(sum(events) AS STRING), CAST(sum(amount) AS STRING), CAST(sum(intercompany) AS STRING)
@@ -163,8 +164,10 @@ if code == "bhg":
                GROUP BY measure ORDER BY measure""", d1=start.strftime("%Y%m%d"), d2=end.strftime("%Y%m%d"))}
         g = lambda m, i: fig.get(m, ("0", "0", "0"))[i]
         span = start.strftime("%d %b %Y") + ("" if days == 1 else f" to {end.strftime('%d %b %Y')}")
-        body = (f"Flexi Quant Finance data for {span} ({days} day{'s' if days > 1 else ''}) has been merged into the "
-                f"group figures.\n\nWhat came in from Flexi Quant Finance:\n"
+        head = (f"Flexi Quant Finance data for {span} ({days} day{'s' if days > 1 else ''}) has been merged into the "
+                "group figures." if new else
+                f"(Sample) The latest group run found no new Flexi Quant Finance day; figures below are for {span}.")
+        body = (head + "\n\nWhat came in from Flexi Quant Finance:\n"
                 f"  loans paid out (INR)                 {money(g('disbursed', 1)):>16}   {g('disbursed', 0)} loans\n"
                 f"  of which paid BHG hospital bills     {money(g('disbursed', 2)):>16}   counted once in group totals\n"
                 f"  instalments collected                {money(g('collected', 1)):>16}   {g('collected', 0)} payments\n"
