@@ -14,3 +14,16 @@ intercompany:                # the same money in both companies, counted once in
   fqf_link: is_hospital_bill     # an FQF disbursement that paid that invoice (fact_fqf_event.bhg_invoice_id)
 
   
+sql_build:                   # 5.5s: group Gold in SQL, gold/sql/group/<name>.sql, in this order ("_" = helper step)
+  - group/dim_company
+  - group/_grp_members           # current patients and master customers with their match hashes
+  - group/_grp_invoice_links     # patient <-> customer pairs linked by a hospital-bill loan
+  - group/_grp_links             # links whose two sides are not yet one person
+  - group/_grp_matched           # every member with its final person
+  - group/map_group_customer
+  - group/dim_group_customer
+  - group/group_match_review
+  - group/group_intercompany
+  - group/fact_group_daily
+  - group/group_exposure         # reads map_group_customer, saved above
+  - group/fact_group_kpi         # reads the group tables saved above
