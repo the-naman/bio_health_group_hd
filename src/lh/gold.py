@@ -88,10 +88,10 @@ def build_dim_date(spark, cfg):
     return save(spark, cfg, "dim_date", dim_date(spark, g["start"], g["end"], int(g["fiscal_year_start_month"])))
 
 
-def contact_fingerprint(cat):
+def contact_fingerprint_udf(cat):
     """Keyed hash of phone (last 10 digits) + date of birth, made with the same group match key as
     id_fingerprint. Two companies can then spot the same contact details without either one
-    showing a phone number or a date of birth."""
+    showing a phone number or a date of birth. Registered for SQL as contact_fingerprint(phone, dob)."""
     key = common.match_key(cat.rsplit("_", 1)[1])          # catalog bhg_dev -> scope lh_dev
 
     def fp(phone, dob):
@@ -99,7 +99,11 @@ def contact_fingerprint(cat):
         if len(digits) != 10 or dob is None:
             return None
         return hmac.new(key.encode(), f"{digits}|{dob.isoformat()}".encode(), hashlib.sha256).hexdigest()
-    return F.udf(fp, "string")(F.col("phone"), F.col("dob"))
+    return F.udf(fp, "string")
+
+
+def contact_fingerprint(cat):
+    return contact_fingerprint_udf(cat)(F.col("phone"), F.col("dob"))
 
 
 def dim_hospital(spark, cat):
