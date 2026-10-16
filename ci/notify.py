@@ -3,6 +3,7 @@ MAIL_<ROLE> environment variables (GitHub secrets). Addresses and the password a
     python ci/notify.py --event request --env test --subject "..." --body "..."
     python ci/notify.py --flow hotfix --event request --env test ...   # 10j: roles from ci.yml "hotfix", URGENT
     python ci/notify.py --flow hotfix --event backmerge --env prod ...  # 10j: back-merge pull request opened
+    python ci/notify.py --flow hotfix --event deployed --env test ...   # 10j: HOTFIX deployed (deploy.yml, ci/flow.py)
 """
 import argparse, os, smtplib, ssl, sys
 from email.message import EmailMessage
@@ -29,7 +30,7 @@ for r in roles:
         sys.exit(f"MAIL secret for {r} is missing")
     to.append(addr)
 
-urgent = "URGENT " if a.flow == "hotfix" and a.event == "request" else ""
+urgent = "" if a.flow != "hotfix" else "URGENT " if a.event == "request" else "HOTFIX "
 msg = EmailMessage()
 msg["Subject"] = f"{urgent}[LH {code.upper()} {a.env}] {a.subject}"
 msg["From"] = os.environ["SMTP_USER"]

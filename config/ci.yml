@@ -27,9 +27,11 @@ hotfix:
     approver: management
     request: [management, manager, teamlead, developer]
     result: [developer, teamlead, manager, management]
+    deployed: [developer, teamlead, manager, management]   # "HOTFIX deployed to test"
   prod:
     environment: prod                           # same environment (and reviewer) as a normal promotion
     approver: bizmanager
     request: [bizmanager, management, manager]
     result: [developer, teamlead, manager, bizmanager, management]
+    deployed: [developer, teamlead, manager, bizmanager, management]   # "HOTFIX deployed to prod"
   backmerge: [developer, teamlead, manager]     # "back-merge pull request prod -> dev opened"
