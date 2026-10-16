@@ -11,7 +11,7 @@ its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same env
 | `security/` | column masks and row filters, driven by `config/privacy.yml` |
 | `bi/` | BI views and AI/BI dashboards (published per environment) |
 | `jobs/` | the daily job as code (`config/jobs.yml`) |
-| `checks/` | automated checks (t00 = smoke check of every daily run) |
+| `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix) |
 | `ci/`, `.github/workflows/` | promotion checks, approval notices, deploy after a merge |
 | `config/` | every setting, per environment. No secrets: they live in GitHub secrets and Databricks secret scopes |
 | `setup_once/` | one-time environment setup and access grants (admin) |
