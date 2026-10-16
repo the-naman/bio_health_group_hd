@@ -16,6 +16,13 @@ Rules then decide what happens to a row (split_and_log):
         orphan_of naming the missing parent, so no money event is lost and gold can show "unknown"
   unreadable phone or national id                                       -> value stays NULL, row is kept (warning)
 Every rule's result is written to ops.dq_results.
+
+New source columns (Phase 4 design: "lands in bronze _rescued_data; added to silver only through a reviewed PR"):
+a column listed under `from_rescued` in config/silver.yml is read from Bronze `_rescued_data` while Bronze keeps
+it there (or from the real Bronze column, if Bronze ever has one). add_new_columns() adds it to an existing
+Silver table (ALTER TABLE) and moves the watermark back to just before the first Bronze row that carries it,
+so rows already processed without it are read once more and get the value (backfill). A re-read row
+replaces the stored one; a NULL new column leaves the SCD2 change hash as it was, so no false versions.
 """
 import os
 from datetime import timedelta
@@ -130,6 +137,14 @@ CLEANERS = {"string": text, "name": name, "code": code, "city": city, "phone": p
             "aadhaar": aadhaar, "int": integer, "decimal": decimal, "date": date, "timestamp": timestamp}
 
 
+def source_col(df, spec, name):
+    """The bronze column `name`; a `from_rescued` column that Bronze does not have as a real column is read
+    from _rescued_data (where Auto Loader keeps columns that are not in the table's schema)."""
+    if name in spec.get("from_rescued", []) and name not in df.columns and "_rescued_data" in df.columns:
+        return F.get_json_object(F.col("_rescued_data"), f"$.{name}")
+    return F.col(f"`{name}`")
+
+
 def apply(df, spec):
     """Bronze rows -> silver columns for one table (config entry `spec`).
 
@@ -139,7 +154,7 @@ def apply(df, spec):
     cols, bad = [], []
     for target, rule in spec["columns"].items():
         kind, source = (rule, target) if isinstance(rule, str) else rule
-        raw = F.col(f"`{source}`")
+        raw = source_col(df, spec, source)
         cols.append(CLEANERS[kind](raw).alias(target))
         if kind != "string":
             bad.append(F.when(text(raw).isNotNull() & CLEANERS[kind](raw).isNull(), F.lit(target)))
@@ -148,7 +163,7 @@ def apply(df, spec):
     cols.append(F.coalesce(deleted, F.lit(False)).alias("is_deleted"))
     cols.append(F.array_compact(F.array(*bad)).alias("_bad") if bad else F.array().cast("array<string>").alias("_bad"))
     sources = [t if isinstance(r, str) else r[1] for t, r in spec["columns"].items()]
-    cols.append(F.to_json(F.struct(*[F.col(f"`{c}`") for c in sources])).alias("_raw"))    # the row as the source sent it
+    cols.append(F.to_json(F.struct(*[source_col(df, spec, c).alias(c) for c in sources])).alias("_raw"))  # row as sent
     keep = [c for c in META + ["id_fingerprint", "_reject"] if c in df.columns]
     return df.select(*cols, *keep)
 
@@ -344,7 +359,8 @@ def latest(df, spec):
 def load_latest(spark, cfg, table, spec):
     """Bronze -> silver for a table kept as one row per key (mode: latest).
     New bronze rows are cleaned, checked, reduced to the latest row per key and merged.
-    An older version that arrives late never overwrites a newer one.
+    An older version that arrives late never overwrites a newer one; the same version read again
+    (backfill of a new column) replaces the stored row.
     Returns {"rows", "quarantined", "orphan_wait", "orphan_accepted", "inserted", "updated"}."""
     target = f"{cfg['catalog']}.silver.{table}"
     new, mark = bronze_new(spark, cfg, table)
@@ -366,7 +382,7 @@ def load_latest(spark, cfg, table, spec):
             MERGE INTO {target} AS t
             USING _silver_in AS s
               ON {on}
-            WHEN MATCHED AND (s.{o} > t.{o} OR (s.{o} = t.{o} AND s._ingest_ts > t._ingest_ts)) THEN UPDATE SET *
+            WHEN MATCHED AND (s.{o} > t.{o} OR (s.{o} = t.{o} AND s._ingest_ts >= t._ingest_ts)) THEN UPDATE SET *
             WHEN NOT MATCHED THEN INSERT *""").first()
         out.update(inserted=m["num_inserted_rows"], updated=m["num_updated_rows"])
     _finish(spark, cfg, table, spec, mark, stats)      # only after the merge: a failed run is simply repeated
@@ -387,9 +403,12 @@ def scd2_chain(existing, incoming, spec):
     keep one row per key and valid_from; drop a new version that changes nothing;
     then valid_to = the next version's valid_from, and the last version is current.
     A version that arrives late lands in its right place, because the whole chain is rebuilt.
+    The same version read again (backfill of a new column) replaces the stored one; unchanged rows keep their hash.
     """
     key = spec["key"]
-    parts = [F.coalesce(F.col(c).cast("string"), F.lit("~")) for c in tracked(spec)]
+    new_cols = set(spec.get("from_rescued", []))     # NULL is skipped by concat_ws: the hash of a row without
+    parts = [F.col(c).cast("string") if c in new_cols   # the new column stays exactly as it was before
+             else F.coalesce(F.col(c).cast("string"), F.lit("~")) for c in tracked(spec)]
     inc = (incoming.withColumn("_row_hash", F.sha2(F.concat_ws("||", *parts), 256))
                    .withColumn("valid_from", F.col(spec["order"])).withColumn("_new", F.lit(True)))
     versions = inc
@@ -398,7 +417,8 @@ def scd2_chain(existing, incoming, spec):
         versions = old.select(*inc.columns).unionByName(inc)
     slot = Window.partitionBy(*key, "valid_from")
     versions = (versions.withColumn("_had", F.min("_new").over(slot) == F.lit(False))     # this version was stored before
-                        .withColumn("_rn", F.row_number().over(slot.orderBy(F.col("_ingest_ts").desc(), F.col("_new"))))
+                        .withColumn("_rn", F.row_number().over(slot.orderBy(F.col("_ingest_ts").desc(),
+                                                                            F.col("_new").desc())))   # re-read wins
                         .filter("_rn = 1"))
     chain = Window.partitionBy(*key).orderBy("valid_from")
     versions = versions.withColumn("_prev", F.lag("_row_hash").over(chain))
@@ -440,7 +460,33 @@ def load_scd2(spark, cfg, table, spec):
     return out
 
 
+def add_new_columns(spark, cfg, table, spec):
+    """Controlled schema change for `from_rescued` columns that the Silver table does not have yet:
+    ALTER TABLE ... ADD COLUMNS, then move the watermark back to just before the first Bronze row that carries
+    the column, so those rows are read once more (backfill). Returns the columns added (usually none)."""
+    target = f"{cfg['catalog']}.silver.{table}"
+    if not spec.get("from_rescued") or not spark.catalog.tableExists(target):
+        return []
+    have = set(spark.table(target).columns)
+    kinds = _kinds(spec)
+    missing = [c for c in spec["from_rescued"] if c not in have]
+    if not missing:
+        return []
+    probe = spark.range(1).select(*[CLEANERS[kinds[c]](F.lit(None).cast("string")).alias(c) for c in missing])
+    added = ", ".join(f"`{f.name}` {f.dataType.simpleString()}" for f in probe.schema.fields)
+    spark.sql(f"ALTER TABLE {target} ADD COLUMNS ({added})")
+    bronze = spark.table(f"{cfg['catalog']}.bronze.{table}")
+    carries = reduce(lambda a, b: a | b, [source_col(bronze, spec, c).isNotNull() for c in missing])
+    first = bronze.filter(carries).agg(F.min("_ingest_ts")).first()[0]
+    state = spark.table(f"{cfg['catalog']}.ops.silver_state").filter(F.col("table_name") == table).first()
+    if first is not None and state is not None and state["last_ingest_ts"] >= first:
+        save_state(spark, cfg, table, first - timedelta(microseconds=1))
+    common.log_run(spark, cfg, "silver.schema_change", "success", 0, f"{table}: added {added}")   # audit trail
+    return missing
+
+
 def load_table(spark, cfg, table, spec):
+    add_new_columns(spark, cfg, table, spec)
     return (load_scd2 if spec.get("mode") == "scd2" else load_latest)(spark, cfg, table, spec)
 
 
