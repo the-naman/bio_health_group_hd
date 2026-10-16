@@ -14,4 +14,22 @@ promotion:
     result: [developer, teamlead, manager, bizmanager]
     deployed: [developer, teamlead, manager, bizmanager, management]
 
-    
+# 10j: emergency hotfix, for a prod problem that cannot wait for the normal dev -> test -> prod path.
+#   1. branch <code>_hotfix_<name> from <code>_prod (so it holds prod + the fix, nothing from dev or test)
+#   2. PR hotfix -> <code>_test: same checks, URGENT approval by Management (GitHub environment <code>_test_hotfix)
+#   3. PR hotfix -> <code>_prod: only after step 2 is merged; urgent approval by the Business-user Manager
+#   4. after the prod deploy, ci/backmerge.py opens a pull request <code>_prod -> <code>_dev, so dev keeps the fix
+# Hotfix pull requests are merged with "Create a merge commit" (not squash): step 3 checks the commits are in test.
+hotfix:
+  prefix: hotfix_                               # branch name <code>_hotfix_<name>
+  test:
+    environment: test_hotfix                    # GitHub environment <code>_test_hotfix
+    approver: management
+    request: [management, manager, teamlead, developer]
+    result: [developer, teamlead, manager, management]
+  prod:
+    environment: prod                           # same environment (and reviewer) as a normal promotion
+    approver: bizmanager
+    request: [bizmanager, management, manager]
+    result: [developer, teamlead, manager, bizmanager, management]
+  backmerge: [developer, teamlead, manager]     # "back-merge pull request prod -> dev opened"

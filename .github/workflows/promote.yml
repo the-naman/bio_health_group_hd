@@ -1,7 +1,8 @@
 name: promote
 
 # 5.10: a pull request into <code>_test or <code>_prod (same file in both repos).
-#   route    - test only accepts PRs from <code>_dev, prod only from <code>_test
+#   route    - ci/route.py: test only accepts PRs from <code>_dev, prod only from <code>_test;
+#              10j hotfix: <code>_hotfix_<name> (from prod) -> test (URGENT, Management) -> prod (Business-user Manager)
 #   checks   - ci/checks.py (compile, no outputs, yaml, job graph, dashboards, no email or token)
 #   approval - waits for the environment's reviewer (Manager for test, Business-user Manager for prod).
 #              Reject = this check fails = the PR cannot merge; fix on the lower branch, push, a new approval starts.
@@ -22,14 +23,18 @@ concurrency:
 
 jobs:
   route:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.r.outputs.code }}
       env: ${{ steps.r.outputs.env }}
+      flow: ${{ steps.r.outputs.flow }}
+      environment: ${{ steps.r.outputs.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0                        # route.py compares the branches (hotfix rules)
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install --quiet pyyaml
@@ -37,30 +42,16 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
-        run: |
-          python - <<'EOF'
-          import os, yaml
-          code = yaml.safe_load(open("config/company.yml"))["code"]
-          base, head = os.environ["BASE"], os.environ["HEAD"]
-          env = base.removeprefix(f"{code}_")
-          rule = yaml.safe_load(open("config/ci.yml"))["promotion"].get(env)
-          if not rule or base != f"{code}_{env}":
-              print(f"::error::{base} is not a promotion branch"); raise SystemExit(1)
-          need = f"{code}_{rule['from']}"
-          if head != need:
-              print(f"::error::{base} only accepts pull requests from {need} (this one is from {head})"); raise SystemExit(1)
-          print(f"promotion {head} -> {base}, approver: {rule['approver']}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"code={code}\nenv={env}\n")
-          EOF
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python ci/route.py
 
   checks:
     needs: route
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install --quiet pyyaml
@@ -68,11 +59,11 @@ jobs:
 
   request:
     needs: [route, checks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install --quiet pyyaml
@@ -90,7 +81,7 @@ jobs:
           HEAD: ${{ github.head_ref }}
           BASE: ${{ github.base_ref }}
         run: |
-          python ci/notify.py --event request --env "${{ needs.route.outputs.env }}" \
+          python ci/notify.py --flow "${{ needs.route.outputs.flow }}" --event request --env "${{ needs.route.outputs.env }}" \
             --subject "Approval needed: $HEAD -> $BASE" \
             --body "Pull request: $TITLE
           $URL
@@ -99,20 +90,20 @@ jobs:
 
   approval:
     needs: [route, checks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
-    environment: ${{ needs.route.outputs.code }}_${{ needs.route.outputs.env }}
+    environment: ${{ needs.route.outputs.environment }}     # <code>_test, <code>_prod or (hotfix) <code>_test_hotfix
     steps:
       - run: echo "Approved for ${{ github.base_ref }}"
 
   result:
     needs: [route, checks, approval]
     if: always() && needs.route.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - run: pip install --quiet pyyaml
@@ -141,7 +132,7 @@ jobs:
           else
             outcome="Rejected"; next="It goes back to $HEAD: fix it there and push; a new approval starts."
           fi
-          python ci/notify.py --event result --env "${{ needs.route.outputs.env }}" \
+          python ci/notify.py --flow "${{ needs.route.outputs.flow }}" --event result --env "${{ needs.route.outputs.env }}" \
             --subject "$outcome: $HEAD -> $BASE" \
             --body "Pull request: $TITLE
           $URL

@@ -5,3 +5,8 @@ dim_date:
   end: 2027-12-31
   fiscal_year_start_month: 4     # India: the financial year runs April to March
   
+# 5.5s: Gold is written in SQL. One SELECT per table in gold/sql/<name>.sql, run in this order.
+# A name starting with "_" is a helper step: a temporary view that later files read, never saved.
+sql_build:
+  bhg: [dim_date, dim_hospital, dim_doctor, dim_patient, _bhg_events, dim_payer, fact_bhg_event]
+  fqf: [dim_date, dim_branch, dim_product, dim_customer, dim_loan, fact_fqf_event]

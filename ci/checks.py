@@ -1,7 +1,7 @@
 """CI checks for a pull request into test or prod (same file in both repos). Run from the repo root:
     python ci/checks.py
 Fails (exit 1) when any check fails. Prints file names and line numbers only, never the matched text."""
-import ast, glob, json, os, re, subprocess, sys
+import ast, glob, json, re, subprocess, sys
 import yaml
 
 sys.path.insert(0, "src")
