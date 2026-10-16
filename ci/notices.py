@@ -2,8 +2,9 @@
 service principal sp_lh_notices (group lh_ci, OAuth client id/secret, read-only grants) with the MAIL_* secrets.
 Nothing is sent twice: every notice is recorded in <catalog>.ops.notice_log, and only a notice not recorded yet goes out.
 
-  delayed    the last finished daily run did not complete Gold, group, BI views or publish -> "today's figures are
-             delayed" (once per run)
+  delayed    the last finished daily run did not complete Gold, group, BI views or publish (once per run), or a run
+             is stuck (once per run), or there was no successful run for too long (once per day) -> "today's
+             figures are delayed"; limits in config/jobs.yml business_notice.freshness
   recovered  the next good run after a "delayed" notice -> "figures are up to date again"
   merge      BHG only: a group run merged new FQF days into the group figures -> what was merged (once per group run)
 
@@ -109,36 +110,76 @@ def failed_tasks(run_id):
                   if not (t.state and t.state.result_state and t.state.result_state.value == "SUCCESS"))
 
 
-runs = list(w.jobs.list_runs(job_id=found[0].job_id, completed_only=True, limit=20))
-fact = f"fact_{code}_event"
-data_to = sql(f"SELECT CAST(max(date_key) AS STRING) FROM gold.{fact} WHERE date_key <= :d"
-              + (" AND event_type <> 'emi_due'" if code == "fqf" else ""), d=date.today().strftime("%Y%m%d"))
-data_to = datetime.strptime(data_to[0][0], "%Y%m%d").strftime("%d %b %Y") if data_to and data_to[0][0] else "unknown"
+job_id = found[0].job_id
+fresh = notice_cfg.get("freshness", {})
+max_since_ok = float(fresh.get("max_hours_since_success", 26))
+max_running = float(fresh.get("max_running_hours", 3))
+now_ms = time.time() * 1000
+hours = lambda ms: (now_ms - ms) / 3_600_000
 
-if not runs:
-    print(f"{job_name}: no finished run yet, nothing to report")
-else:
-    run, bad = runs[0], failed_tasks(runs[0].run_id)
+runs = list(w.jobs.list_runs(job_id=job_id, completed_only=True, limit=20))
+active = list(w.jobs.list_runs(job_id=job_id, active_only=True, limit=5))
+if not runs and not active:   # environment not live yet (prod before its first run): nothing to report, not an error
+    print(f"{job_name}: no run yet, nothing to report")
+    sys.exit(0)
+
+fact = f"fact_{code}_event"                    # Gold may not exist yet if the very first run failed
+has_fact = sql("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'gold' AND table_name = :t",
+               t=fact)[0][0] != "0"
+data_to = sql(f"SELECT CAST(max(date_key) AS STRING) FROM gold.{fact} WHERE date_key <= :d"
+              + (" AND event_type <> 'emi_due'" if code == "fqf" else ""),
+              d=date.today().strftime("%Y%m%d")) if has_fact else None
+data_to = (datetime.strptime(data_to[0][0], "%Y%m%d").strftime("%d %b %Y") if data_to and data_to[0][0]
+           else None)
+
+run = runs[0] if runs else None
+bad = failed_tasks(run.run_id) if run else []
+ok_before = next((r for r in runs if not failed_tasks(r.run_id)), None) if bad or not run else run
+if run:
     print(f"{job_name}: last finished run {ist(run.start_time)}, business tasks not done: {bad or 'none'}")
-    ok_before = next((r for r in runs[1:] if not failed_tasks(r.run_id)), None)
-    last = sql("SELECT notice FROM ops.notice_log WHERE notice IN ('delayed', 'recovered') ORDER BY sent_at DESC LIMIT 1")
-    last = last[0][0] if last else None
-    delayed_body = (f"The daily update of the {name} figures that started {ist(run.start_time)} did not finish.\n"
-                    f"Dashboards still show the last complete update"
-                    + (f" ({ist(ok_before.start_time)})" if ok_before else "") + f", with data up to {data_to}.\n"
-                    "The data team has already been alerted and is working on it. You will get a second message as "
-                    "soon as the figures are up to date again.")
-    recovered_body = (f"The {name} figures are up to date again (update started {ist(run.start_time)}).\n"
-                      f"Dashboards now show data up to {data_to}.")
-    if a.sample:
-        send("delayed", "sample", "Today's figures are delayed", delayed_body)
-        send("recovered", "sample", "Figures are up to date again", recovered_body)
-    elif bad and not sent("delayed", str(run.run_id)):
-        send("delayed", str(run.run_id), "Today's figures are delayed", delayed_body)
-    elif not bad and last == "delayed":
-        send("recovered", str(run.run_id), "Figures are up to date again", recovered_body)
+stuck = next((r for r in active if r.start_time and hours(r.start_time) > max_running), None)
+ok_age = hours(ok_before.end_time or ok_before.start_time) if ok_before else None
+stale = ok_age is None or ok_age > max_since_ok
+print(f"freshness: last successful run {ist(ok_before.start_time) if ok_before else 'none'}"
+      f"{f' ({ok_age:.0f} h ago)' if ok_age is not None else ''}, stuck run: {'yes' if stuck else 'no'}")
+last = sql("SELECT notice FROM ops.notice_log WHERE notice IN ('delayed', 'recovered') ORDER BY sent_at DESC LIMIT 1")
+last = last[0][0] if last else None
+
+shown = ((f"Dashboards still show the last complete update"
+          + (f" ({ist(ok_before.start_time)})" if ok_before else "") + f", with data up to {data_to}.\n")
+         if data_to else "There are no figures on the dashboards yet.\n") + (
+         "The data team has already been alerted and is working on it. You will get a second message as "
+         "soon as the figures are up to date again.")
+why = {
+    "failed": f"The daily update of the {name} figures that started {ist(run.start_time) if run else '-'} did not finish.\n",
+    "stuck": f"The daily update of the {name} figures that started {ist((stuck or run).start_time) if (stuck or run) else '-'} is still "
+             f"running after more than {max_running:.0f} hours.\n",
+    "stale": f"There has been no complete daily update of the {name} figures for more than {max_since_ok:.0f} hours.\n",
+}
+today = datetime.now(IST).strftime("%Y-%m-%d")
+candidates = []                                 # (reason, ref): each sent once; the first not yet sent goes out
+if bad:
+    candidates.append(("failed", str(run.run_id)))
+if stuck:
+    candidates.append(("stuck", f"stuck-{stuck.run_id}"))
+problem = bool(candidates) or stale
+if stale and not sql("SELECT 1 FROM ops.notice_log WHERE notice = 'delayed' "
+                     "AND sent_at >= current_timestamp() - INTERVAL 20 HOURS"):
+    candidates.append(("stale", f"stale-{today}"))    # quiet problem: at most one "delayed" a day
+recovered_body = (f"The {name} figures are up to date again (update started {ist(ok_before.start_time) if ok_before else '-'}).\n"
+                  + (f"Dashboards now show data up to {data_to}." if data_to else ""))
+if a.sample:
+    for reason in ("failed", "stuck", "stale"):
+        send("delayed", f"sample-{reason}", "Today's figures are delayed", why[reason] + shown)
+    send("recovered", "sample", "Figures are up to date again", recovered_body)
+else:
+    todo = next(((r, ref) for r, ref in candidates if not sent("delayed", ref)), None)
+    if todo:
+        send("delayed", todo[1], "Today's figures are delayed", why[todo[0]] + shown)
+    elif not problem and last == "delayed":
+        send("recovered", str(ok_before.run_id), "Figures are up to date again", recovered_body)
     else:
-        print("figures: nothing to send")
+        print("figures: nothing to send" + (" (problem already reported)" if problem else ""))
 
 # ---- 2. merge notice (parent only): what came in from FQF in each group run that merged new FQF days
 if code == "bhg":
