@@ -1,0 +1,58 @@
+name: backmerge
+
+# 10j: after every push to <code>_prod (same file in both repos). If prod holds a change that dev does not have
+# (a hotfix), ci/backmerge.py opens a pull request <code>_prod -> <code>_dev and the roles in config/ci.yml
+# (hotfix.backmerge) get a mail. After a normal promotion dev already has everything: nothing happens.
+# Needs Settings -> Actions -> General -> "Allow GitHub Actions to create and approve pull requests";
+# without it the mail carries a link to open the pull request by hand.
+
+on:
+  push:
+    branches: ["*_prod"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: backmerge-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  backmerge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml
+      - id: b
+        name: Does dev have everything that is in prod?
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python ci/backmerge.py
+      - name: Mail "back-merge needed"
+        if: steps.b.outputs.needed == 'yes'
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_BIZMANAGER: ${{ secrets.MAIL_BIZ_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          URL: ${{ steps.b.outputs.url }}
+          CONFLICT: ${{ steps.b.outputs.conflict }}
+        run: |
+          code=$(python -c "import yaml; print(yaml.safe_load(open('config/company.yml'))['code'])")
+          extra=""
+          [ "$CONFLICT" = "yes" ] && extra=" It has conflicts: resolve them on a branch from ${code}_dev first."
+          python ci/notify.py --flow hotfix --event backmerge --env prod \
+            --subject "Back-merge needed: ${code}_prod -> ${code}_dev" \
+            --body "Prod holds a hotfix that ${code}_dev does not have yet. Merge this pull request with 'Create a merge commit' so the fix is not lost at the next promotion:
+          $URL$extra"
