@@ -6,7 +6,7 @@
 --                       the Gold runner registers (it needs the group match key from the secret scope).
 WITH patients AS (
   SELECT
-    patient_id, gender, city, insurance_provider, id_fingerprint, phone, dob, is_current,
+    patient_id, gender, city, insurance_provider, preferred_language, id_fingerprint, phone, dob, is_current,
     CASE WHEN row_number() OVER (PARTITION BY patient_id ORDER BY valid_from) = 1
          THEN TIMESTAMP'1900-01-01 00:00:00' ELSE valid_from END               AS valid_from,
     coalesce(valid_to, TIMESTAMP'9999-12-31 23:59:59')                         AS valid_to
@@ -18,6 +18,7 @@ SELECT
   gender,
   city,
   insurance_provider,
+  preferred_language,                                               -- source column from 15 Oct 2026, NULL before
   id_fingerprint,
   contact_fingerprint(phone, dob)                                   AS contact_fingerprint,
   valid_from,
@@ -26,5 +27,5 @@ SELECT
 FROM patients
 
 UNION ALL
---     key  patient_id gender     city       insurance id_fp contact_fp valid_from                      valid_to                        is_current
-SELECT -1,  'unknown', 'unknown', 'unknown', NULL,     NULL, NULL,      TIMESTAMP'1900-01-01 00:00:00', TIMESTAMP'9999-12-31 23:59:59', TRUE
+--     key  patient_id gender     city       insurance language id_fp contact_fp valid_from                      valid_to                        is_current
+SELECT -1,  'unknown', 'unknown', 'unknown', NULL,     NULL,    NULL, NULL,      TIMESTAMP'1900-01-01 00:00:00', TIMESTAMP'9999-12-31 23:59:59', TRUE

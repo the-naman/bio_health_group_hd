@@ -9,6 +9,8 @@
 # allowed  : values a column may hold (checked after cleaning)
 # parents  : column: parent table (row waits in quarantine if the parent is missing; empty value is fine)
 # delete   : bronze column and value that mark a deleted row
+# from_rescued: new source columns read from bronze _rescued_data (Phase 4: a new column lands there and is added
+#            to silver only through a reviewed PR); the runner adds them to the table and backfills once
 tables:
   hospitals:
     key: [hospital_id]
@@ -65,7 +67,9 @@ tables:
       phone: phone
       city: city
       insurance_provider: string
+      preferred_language: string          # new source column from 15 Oct 2026 (NULL before)
       last_modified: timestamp
+    from_rescued: [preferred_language]
 
   appointments:
     key: [appt_id]
