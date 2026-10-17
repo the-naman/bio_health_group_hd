@@ -13,8 +13,9 @@ Settings in config/bi.yml. plan mode changes nothing. Uses only the Databricks R
 import glob, json, os, re
 import yaml
 
-DEV = re.compile(r"\b(bhg|fqf)_dev\.")
-LEFT = re.compile(r"\b(bhg|fqf)_dev\b")
+# the underscore may be markdown-escaped in text widgets: bhg\\_dev in the file (bhg\_dev on screen)
+DEV = re.compile(r"\b(bhg|fqf)((?:\\\\)*)_dev\.")
+LEFT = re.compile(r"\b(bhg|fqf)(?:\\\\)*_dev\b")
 
 
 def load_bi(root):
@@ -24,7 +25,7 @@ def load_bi(root):
 
 def for_env(text, env):
     """The dashboard text pointed at this environment's catalogs."""
-    out = DEV.sub(lambda m: f"{m.group(1)}_{env}.", text)
+    out = DEV.sub(lambda m: f"{m.group(1)}{m.group(2)}_{env}.", text)
     if env != "dev" and LEFT.search(out):
         raise ValueError(f"a dev catalog name is left in the {env} copy")
     return out
