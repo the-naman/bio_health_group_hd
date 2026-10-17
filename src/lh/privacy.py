@@ -148,8 +148,16 @@ def apply(spark, cfg, env):
     cat = cfg["catalog"]
     ready = {r[0] for r in spark.sql(
         f"SELECT routine_name FROM {cat}.information_schema.routines WHERE routine_schema = 'ops'").collect()}
-    done = {"set": 0, "kept": 0}
-    for r in status(spark, cfg, env):
+    done = {"set": 0, "kept": 0, "functions_refreshed": 0}
+    rows = list(status(spark, cfg, env))
+    if env in load().get("pipeline", {}):
+        # test, prod: the job account made these functions, so it replaces them every run; a change to `clear`
+        # (e.g. lh_group_reader) then takes effect on the next run. Dev keeps them as they are (several people
+        # run dev jobs and only the creator may replace a function; the dev clear list does not change).
+        for kind, dtype in sorted({(r["kind"], r["dtype"] if r["kind"] == "hide" else "string") for r in rows}):
+            ready.add(create_function(spark, cfg, env, kind, dtype).rsplit(".", 1)[-1])
+            done["functions_refreshed"] += 1
+    for r in rows:
         if r["actual"] == r["wanted"]:
             done["kept"] += 1
             continue
