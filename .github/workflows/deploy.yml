@@ -2,7 +2,8 @@ name: deploy
 
 # 5.10: after a merge into <code>_test or <code>_prod (same file in both repos). Direct pushes are blocked by the
 # rulesets, so this only runs for an approved, merged pull request.
-#   ci/deploy.py - pull the env Git folder to the merged commit, redeploy the daily job from it, run t28_jobs
+#   ci/deploy.py - as the deploy account sp_lh_deploy (OAuth M2M, never a person's token): pull its env Git folder to
+#                  the merged commit (created the first time), redeploy the daily job from it, run t28_jobs
 #   ci/flow.py   - which pull request brought the commit: normal promotion or 10j hotfix (<code>_hotfix_<name>)
 #   notice       - Gmail to the roles in config/ci.yml: deployed, or deploy failed; a hotfix says "HOTFIX" and
 #                  goes to the hotfix.<env>.deployed roles (incl. Management, who approved it)
@@ -41,7 +42,8 @@ jobs:
       - name: Pull Git folder, redeploy job, check it
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.LH_DEPLOY_CLIENT_ID }}          # service principal sp_lh_deploy (group lh_deploy)
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.LH_DEPLOY_CLIENT_SECRET }}  # OAuth M2M; the admin token is not used here
         run: python ci/deploy.py --env "${{ steps.env.outputs.env }}" --sha "${{ github.sha }}"
       - name: Mail the result
         if: always()
