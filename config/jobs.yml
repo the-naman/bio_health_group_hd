@@ -18,10 +18,11 @@ tasks:
   - {key: bi_views, notebook: bi/01_create_views, after: [group], timeout: 15, retries: 1}
   - {key: publish, notebook: bi/02_publish_dashboards, after: [bi_views], params: {mode: apply}, timeout: 15, retries: 1}
   - {key: smoke, notebook: checks/t00_job_smoke, after: [publish], timeout: 15, retries: 0}
-permissions:   # groups only; the owner is the person (dev) or the job account (test/prod); lh_ci = automation (10e)
+permissions:   # groups only; the owner is the person (dev) or the job account (test/prod); lh_ci = automation (10e);
+               # lh_deploy = the CI deploy account sp_lh_deploy (redeploys test/prod after a merge, never a person)
   dev: {lh_management: CAN_MANAGE, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_manager: CAN_VIEW}
-  test: {lh_management: CAN_MANAGE, lh_manager: CAN_MANAGE_RUN, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
-  prod: {lh_management: CAN_MANAGE, lh_manager: CAN_VIEW, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
+  test: {lh_management: CAN_MANAGE, lh_deploy: CAN_MANAGE, lh_manager: CAN_MANAGE_RUN, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
+  prod: {lh_management: CAN_MANAGE, lh_deploy: CAN_MANAGE, lh_manager: CAN_VIEW, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
 # 5.10: dev = one job per person. Whoever works in dev deploys their own copy, lh_<code>_dev_daily_<role>, from their
 # own Git folder; it runs as them and only they get its mails. Others may only view it. The role comes from the group.
 dev_roles: {lh_developer: developer, lh_teamlead: teamlead, lh_manager: manager}
