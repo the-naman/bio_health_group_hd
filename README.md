@@ -16,6 +16,14 @@ its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same env
 | `config/` | every setting, per environment. No secrets: they live in GitHub secrets and Databricks secret scopes |
 | `setup_once/` | one-time environment setup and access grants (admin) |
 
+## One framework, every table on its own (requirement 17)
+Bronze and Silver are metadata-driven: one engine per layer (`src/lh/bronze.py`, `src/lh/silver.py`) and one
+config entry per table (`config/tables.yml`, `config/silver.yml`). Gold is one SQL file per table. Every table
+still has its own load: its own Auto Loader checkpoint and files, Silver watermark, quarantine rows, audit row
+(`bronze.<table>`) and checkpoint result. To work on a single table, open `bronze/01_load_bronze` or
+`silver/01_load_silver` in your dev Git folder, set `env = dev` and `table = <name>` and run it; the default
+`table = all` is what the daily job runs. A new table = one config entry (+ its check), no new notebook.
+
 ## How code moves
 - Work happens on `bhg_dev`: each person runs their own dev job (`lh_bhg_dev_daily_<role>`).
 - `bhg_dev` -> `bhg_test` and `bhg_test` -> `bhg_prod` only by pull request. Checks run first; the Manager
