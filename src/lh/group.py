@@ -25,7 +25,8 @@ How people are matched (only keyed hashes are read, never names, phones or dates
   1. same id_fingerprint (keyed hash of Aadhaar) = same person
   2. a hospital-bill loan links the BHG patient of the invoice and the FQF customer of the loan;
      if only one side has an Aadhaar fingerprint, the other side joins that person
-  3. a decision recorded in ops.group_match_decisions ("same") merges a reviewed pair
+  3. a decision recorded in ops.group_match_decisions ("same") merges a reviewed pair; the Manager records it by
+     review_key (ids are tokens in test/prod), gold/sql/group/_grp_decisions.sql turns it back into the pair
 Look-alikes are never merged automatically.
 """
 import os
@@ -56,11 +57,15 @@ DECISIONS = "ops.group_match_decisions"
 
 
 def decisions(spark, cat):
-    """Review decisions made by a person; created empty on first use, never rebuilt.
+    """Review decisions made by a person; created empty on first use, never rebuilt. A decision names the pair by
+    review_key (from gold.group_match_review); decided_by holds the role ('manager'), never a name or address.
     The Manager records them, so lh_manager may read and write this one table in every environment
     (granted here on each run, rerun-safe; in prod the Manager is otherwise read-only)."""
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.{DECISIONS} (
-        bhg_patient_id STRING, fqf_customer_id STRING, decision STRING, decided_by STRING, decided_at TIMESTAMP)""")
+        bhg_patient_id STRING, fqf_customer_id STRING, decision STRING, decided_by STRING, decided_at TIMESTAMP,
+        review_key BIGINT)""")
+    if "review_key" not in spark.table(f"{cat}.{DECISIONS}").columns:   # tables made before review_key existed
+        spark.sql(f"ALTER TABLE {cat}.{DECISIONS} ADD COLUMNS (review_key BIGINT)")
     spark.sql(f"GRANT SELECT, MODIFY ON TABLE {cat}.{DECISIONS} TO `lh_manager`")
     return spark.table(f"{cat}.{DECISIONS}").filter(F.col("decision").isin("same", "different"))
 

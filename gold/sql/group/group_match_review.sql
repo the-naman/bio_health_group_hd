@@ -1,4 +1,5 @@
--- group_match_review: pairs a person must look at (the Manager records a decision in ops.group_match_decisions).
+-- group_match_review: pairs a person must look at. The Manager records a decision in ops.group_match_decisions by
+-- review_key (README: "Deciding look-alike pairs"); _grp_decisions turns it back into the pair.
 --   same phone and date of birth, different Aadhaar     -> maybe one person with a wrong Aadhaar, maybe not
 --   hospital bill paid by a loan of a different Aadhaar -> a loan paid someone else's bill
 -- status: open (no decision yet) or decided (decision = same / different).
@@ -16,7 +17,7 @@ candidates AS (
 ),
 decisions AS (
   SELECT bhg_patient_id, fqf_customer_id, decision
-  FROM ops.group_match_decisions WHERE decision IN ('same', 'different')
+  FROM _grp_decisions
 )
 SELECT
   xxhash64(CAST(r.bhg_patient_id AS STRING), CAST(r.fqf_customer_id AS STRING), CAST(r.reason AS STRING)) AS review_key,
@@ -27,3 +28,6 @@ SELECT
   d.decision
 FROM candidates r
 LEFT JOIN decisions d ON r.bhg_patient_id = d.bhg_patient_id AND r.fqf_customer_id = d.fqf_customer_id
+JOIN _grp_matched pm ON pm.company_code = 'bhg' AND pm.member_id = r.bhg_patient_id
+JOIN _grp_matched cm ON cm.company_code = 'fqf' AND cm.member_id = r.fqf_customer_id
+WHERE pm.anchor <> cm.anchor      -- a pair that is already one person (e.g. decided 'same') is no longer listed
