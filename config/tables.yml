@@ -1,0 +1,15 @@
+# One entry per source table.
+# format: csv
+# fingerprint: column holding the national id (hashed into id_fingerprint), blank if none
+tables:
+  hospitals:        {source: files,      format: csv, fingerprint: ""}
+  departments:      {source: files,      format: csv, fingerprint: ""}
+  doctors:          {source: mysql,      format: csv, fingerprint: ""}
+  patients:         {source: files,      format: csv, fingerprint: aadhaar}
+  appointments:     {source: files,      format: csv, fingerprint: ""}
+  admissions:       {source: files,      format: csv, fingerprint: ""}
+  treatments:       {source: files,      format: csv, fingerprint: ""}
+  pharmacy_sales:   {source: files,      format: csv, fingerprint: ""}
+  invoices:         {source: files,      format: csv, fingerprint: ""}
+  payments:         {source: files,      format: csv, fingerprint: ""}
+  insurance_claims: {source: salesforce, format: csv, fingerprint: ""}

@@ -1,0 +1,75 @@
+name: deploy
+
+# 5.10: after a merge into <code>_test or <code>_prod (same file in both repos). Direct pushes are blocked by the
+# rulesets, so this only runs for an approved, merged pull request.
+#   ci/deploy.py - as the deploy account sp_lh_deploy (OAuth M2M, never a person's token): pull its env Git folder to
+#                  the merged commit (created the first time), redeploy the daily job from it, run t28_jobs
+#   ci/flow.py   - which pull request brought the commit: normal promotion or 10j hotfix (<code>_hotfix_<name>)
+#   notice       - Gmail to the roles in config/ci.yml: deployed, or deploy failed; a hotfix says "HOTFIX" and
+#                  goes to the hotfix.<env>.deployed roles (incl. Management, who approved it)
+# No job run is started here: the first test run is started by hand (10g); prod starts at go-live (5.13).
+
+on:
+  push:
+    branches: ["*_test", "*_prod"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml databricks-sdk==0.143.0
+      - id: env
+        run: echo "env=${GITHUB_REF_NAME##*_}" >> "$GITHUB_OUTPUT"
+      - id: flow
+        name: Normal promotion or hotfix?
+        continue-on-error: true    # the deploy itself never depends on this
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python ci/flow.py
+      - name: Pull Git folder, redeploy job, check it
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.LH_DEPLOY_CLIENT_ID }}          # service principal sp_lh_deploy (group lh_deploy)
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.LH_DEPLOY_CLIENT_SECRET }}  # OAuth M2M; the admin token is not used here
+        run: python ci/deploy.py --env "${{ steps.env.outputs.env }}" --sha "${{ github.sha }}"
+      - name: Mail the result
+        if: always()
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_BIZMANAGER: ${{ secrets.MAIL_BIZ_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          RESULT: ${{ job.status }}
+          FLOW: ${{ steps.flow.outputs.flow || 'promotion' }}
+          HEAD: ${{ steps.flow.outputs.head }}
+          PR: ${{ steps.flow.outputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          what=""
+          [ "$FLOW" = "hotfix" ] && what=" Hotfix from $HEAD (pull request #$PR)."
+          if [ "$RESULT" = "success" ]; then
+            subject="Deployed ${GITHUB_SHA::7} to $GITHUB_REF_NAME"
+            body="The $GITHUB_REF_NAME Git folder is at ${GITHUB_SHA::7}, the daily job is redeployed and t28_jobs passed.$what"
+            [ "$FLOW" = "hotfix" ] && [ "${{ steps.env.outputs.env }}" = "prod" ] && \
+              body="$body A back-merge pull request into dev follows (backmerge.yml)."
+          else
+            subject="Deploy FAILED for $GITHUB_REF_NAME"
+            body="The deploy of ${GITHUB_SHA::7} to $GITHUB_REF_NAME failed.$what Details: $RUN_URL"
+          fi
+          python ci/notify.py --flow "$FLOW" --event deployed --env "${{ steps.env.outputs.env }}" --subject "$subject" --body "$body"

@@ -1,0 +1,49 @@
+# 5.9: the daily pipeline job per company and environment (same file in both repos).
+# No people and no IDs here: the Git folder, the job account and the mail addresses are looked up when the job is deployed.
+name: lh_{code}_{env}_daily
+repo: {bhg: bio_health_group_hd, fqf: flexi_quant_finance_fd}
+folder: {dev: "{repo}", test: "{repo}_test", prod: "{repo}_prod"}   # Git folder in the deployer's home
+run_as: {dev: deployer, test: "sp_{code}_test", prod: "sp_{code}_prod"}
+timezone: Asia/Kolkata
+schedule: {fqf: "0 0 2 * * ?", bhg: "0 30 2 * * ?"}   # 02:00 and 02:30 IST, test/prod only; dev runs on demand
+paused: true                                          # switched on at go-live (5.13)
+job_timeout_minutes: 150
+tasks:
+  - {key: bronze, notebook: bronze/01_load_bronze, timeout: 30, retries: 1}
+  - {key: silver, notebook: silver/01_load_silver, after: [bronze], timeout: 45, retries: 1, notify: true}
+  - {key: silver_rebuild, notebook: silver/02_rebuild_silver, after: [silver], run_if: AT_LEAST_ONE_FAILED, timeout: 60, retries: 0}
+  - {key: masks, notebook: security/01_apply_masks, after: [silver, silver_rebuild], run_if: AT_LEAST_ONE_SUCCESS, timeout: 15, retries: 1}
+  - {key: gold, notebook: gold/01_load_gold, after: [masks], timeout: 30, retries: 1}
+  - {key: group, notebook: gold/02_load_group, after: [gold], companies: [bhg], timeout: 30, retries: 1}
+  - {key: bi_views, notebook: bi/01_create_views, after: [group], timeout: 15, retries: 1}
+  - {key: publish, notebook: bi/02_publish_dashboards, after: [bi_views], params: {mode: apply}, timeout: 15, retries: 1}
+  - {key: smoke, notebook: checks/t00_job_smoke, after: [publish], timeout: 15, retries: 0}
+permissions:   # groups only; the owner is the person (dev) or the job account (test/prod); lh_ci = automation (10e);
+               # lh_deploy = the CI deploy account sp_lh_deploy (redeploys test/prod after a merge, never a person)
+  dev: {lh_management: CAN_MANAGE, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_manager: CAN_VIEW}
+  test: {lh_management: CAN_MANAGE, lh_deploy: CAN_MANAGE, lh_manager: CAN_MANAGE_RUN, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
+  prod: {lh_management: CAN_MANAGE, lh_deploy: CAN_MANAGE, lh_manager: CAN_VIEW, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
+# 5.10: dev = one job per person. Whoever works in dev deploys their own copy, lh_<code>_dev_daily_<role>, from their
+# own Git folder; it runs as them and only they get its mails. Others may only view it. The role comes from the group.
+dev_roles: {lh_developer: developer, lh_teamlead: teamlead, lh_manager: manager}
+# 5.10: failure emails, tier 1 = technical mail straight from Databricks to the people who fix it (any failed task,
+# including a failed Silver checkpoint that starts the rebuild). Addresses never live in Git: GitHub secrets MAIL_* ->
+# secret scope lh_<env> (keys mail_<role>, written by the setup-secret-scopes workflow) -> job settings at deploy time.
+notify:
+  dev: [self]                               # only the person whose dev job it is
+  test: [developer, teamlead, manager]      # the team under the Manager
+  prod: [developer, teamlead, manager]      # the fixers
+# 5.10/10e: tier 2 = plain-language business notice, sent by .github/workflows/notices.yml (ci/notices.py) from the
+# MAIL_* secrets, not by Databricks: "today's figures are delayed" when a task below did not finish, "up to date again"
+# after the next good run, and (BHG) what was merged from FQF into the group figures. Each notice is sent once.
+# Freshness (silent problems): no successful run for too long (schedule paused, run never started) or a run that is
+# still going after too long also count as "delayed" (once per day / once per run). Nothing runs before go-live.
+# prod = everyone; test = the team under the Manager, only for trying the notices by hand.
+business_notice:
+  tasks: [gold, group, bi_views, publish]
+  roles:
+    prod: [developer, teamlead, manager, management, bizmanager]
+    test: [developer, teamlead, manager]
+  freshness:
+    max_hours_since_success: 26             # daily run at 02:00/02:30 IST + 2 h grace
+    max_running_hours: 3                    # a normal run takes about 25 minutes
