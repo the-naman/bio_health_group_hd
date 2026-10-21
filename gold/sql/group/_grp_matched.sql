@@ -3,12 +3,13 @@
 --   1. same Aadhaar fingerprint = same person (already in _grp_members)
 --   2. invoice_link: a hospital-bill loan links a BHG patient and an FQF customer; if only one side has an
 --      Aadhaar fingerprint, the other side joins that person (two different fingerprints are never merged)
---   3. review: a reviewed pair decided 'same' in ops.group_match_decisions; the FQF member joins the BHG person
+--   3. review: a reviewed pair decided 'same' (ops.group_match_decisions, resolved in _grp_decisions); the FQF member
+--      joins the BHG person
 -- Look-alikes (same phone + date of birth) are never merged automatically; they go to group_match_review.
 WITH
 decided_same AS (
   SELECT bhg_patient_id AS patient_id, fqf_customer_id AS customer_id
-  FROM ops.group_match_decisions WHERE decision = 'same'
+  FROM _grp_decisions WHERE decision = 'same'
 ),
 moves AS (
   -- invoice link, patient has no fingerprint, customer has one: the patient joins the customer's person
