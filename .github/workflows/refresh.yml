@@ -1,0 +1,41 @@
+name: refresh
+
+# 5.11 controlled refresh (same file in both repos). Started by hand: Actions -> refresh -> Run workflow, "Use workflow
+# from" = <code>_prod. Waits for approval in the <code>_refresh environment (reviewer, prod branch only), which holds
+# REFRESH_HASH_KEY. Runs ci/refresh.py as the deploy account: key -> scope lh_refresh, then the source half as the source
+# job account, then (test) the target half + the normal test job. Refresh FQF first, then BHG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Environment to refresh (test = from prod, dev = from test)"
+        type: choice
+        options: [test, dev]
+        default: test
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment: ${{ github.event.repository.name == 'bio_health_group_hd' && 'bhg_refresh' || 'fqf_refresh' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml databricks-sdk==0.143.0
+      - name: Refresh
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.LH_DEPLOY_CLIENT_ID }}          # deploy account sp_lh_deploy, never a person
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.LH_DEPLOY_CLIENT_SECRET }}
+          REFRESH_HASH_KEY: ${{ secrets.REFRESH_HASH_KEY }}                 # environment secret, never printed
+        run: python ci/refresh.py --target "${{ inputs.target }}"
