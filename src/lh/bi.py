@@ -12,6 +12,8 @@ to whoever reads the view (Unity Catalog checks the reader, not the view). They 
          v_health_freshness      how far the company fact reaches and how many days it is behind
          v_health_dq             latest data-quality result per table and rule
          v_health_quarantine     rows held in quarantine per table and rule (no row keys or raw rows)
+         v_health_quarantine_daily  new quarantine rows per IST day, table and rule (5.12 spike alert)
+         v_health_rescued        column names found in Bronze _rescued_data, planned or new (5.12, ops.rescued_keys)
          v_health_merge          group merge runs, newest first (BHG only)
   group  v_group_daily           day x company x measure, intercompany removed (BHG only)
          v_group_kpi             headline numbers
@@ -113,6 +115,11 @@ HEALTH = {
     "v_health_quarantine": """
         SELECT table_name, rule, status, count(*) AS rows, min(first_seen) AS oldest, max(last_seen) AS latest
         FROM {cat}.silver.quarantine GROUP BY ALL""",
+    "v_health_quarantine_daily": """
+        SELECT table_name, rule, to_date(from_utc_timestamp(first_seen, 'Asia/Kolkata')) AS day, count(*) AS rows
+        FROM {cat}.silver.quarantine GROUP BY ALL""",
+    "v_health_rescued": """
+        SELECT table_name, key, rows, first_seen, last_seen, planned FROM {cat}.ops.rescued_keys""",
 }
 MERGE = {
     "v_health_merge": """
@@ -139,4 +146,3 @@ def build(spark, cfg):
         spark.sql(f"CREATE OR REPLACE VIEW {cat}.gold.{name} AS {sql.format(cat=cat)}")
         out[name] = spark.table(f"{cat}.gold.{name}").count()
     return out
-
