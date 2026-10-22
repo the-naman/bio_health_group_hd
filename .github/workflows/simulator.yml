@@ -9,9 +9,9 @@ on:
         default: dev
         type: choice
         options: [dev, test, prod]
-  # Nightly run for test and prod. Switched on at go-live (step 5.13).
-  # schedule:
-  #   - cron: "0 19 * * *"   # 00:30 IST
+  # Nightly run for test and prod, live since go-live (5.13, 23 Oct 2026). Jobs read the files at 02:00 (prod), 03:30 (test).
+  schedule:
+    - cron: "0 19 * * *"   # 00:30 IST
 
 permissions:
   contents: read
