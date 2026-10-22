@@ -20,15 +20,16 @@ tasks:
   - {key: smoke, notebook: checks/t00_job_smoke, after: [publish], timeout: 15, retries: 0}
 permissions:   # groups only; the owner is the person (dev) or the job account (test/prod); lh_ci = automation (10e);
                # lh_deploy = the CI deploy account sp_lh_deploy (redeploys test/prod after a merge, never a person)
-  dev: {lh_management: CAN_MANAGE, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_manager: CAN_VIEW}
+  dev: {lh_management: CAN_MANAGE, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_manager: CAN_VIEW, lh_ci: CAN_VIEW}
   test: {lh_management: CAN_MANAGE, lh_deploy: CAN_MANAGE, lh_manager: CAN_MANAGE_RUN, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
   prod: {lh_management: CAN_MANAGE, lh_deploy: CAN_MANAGE, lh_manager: CAN_VIEW, lh_developer: CAN_VIEW, lh_teamlead: CAN_VIEW, lh_ci: CAN_VIEW}
 # 5.10: dev = one job per person. Whoever works in dev deploys their own copy, lh_<code>_dev_daily_<role>, from their
 # own Git folder; it runs as them and only they get its mails. Others may only view it. The role comes from the group.
 dev_roles: {lh_developer: developer, lh_teamlead: teamlead, lh_manager: manager}
-# Requirement 10: development and testing in dev are communicated Developer <-> Team Lead. When one of them runs
-# their dev job, the other gets the result by mail (success and failure); the owner still gets only failures.
-dev_inform: {developer: [teamlead], teamlead: [developer]}
+# Dev mails (5.13, user decision 21 Oct): each person's dev job mails only its owner, on failure and on success.
+# Requirement 10 (Developer <-> Team Lead) is the daily dev-activity digest (ci/alerts.py --dev-activity) instead.
+# dev_inform could still add other roles to one person's job mails: {developer: [teamlead]}; empty = owner only.
+dev_inform: {}
 # 5.10: failure emails, tier 1 = technical mail straight from Databricks to the people who fix it (any failed task,
 # including a failed Silver checkpoint that starts the rebuild). Addresses never live in Git: GitHub secrets MAIL_* ->
 # secret scope lh_<env> (keys mail_<role>, written by the setup-secret-scopes workflow) -> job settings at deploy time.
@@ -46,7 +47,7 @@ business_notice:
   tasks: [gold, group, bi_views, publish]
   roles:
     prod: [developer, teamlead, manager, management, bizmanager]
-    test: [developer, teamlead, manager]
+    test: [developer, teamlead, manager, management]   # 5.13: Management also sees test notices
   freshness:
     max_hours_since_success: 26             # daily run at 02:00/02:30 IST + 2 h grace
     max_running_hours: 3                    # a normal run takes about 25 minutes

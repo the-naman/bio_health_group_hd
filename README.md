@@ -70,7 +70,7 @@ For dev: same with target = dev; then each person runs `refresh/02_refresh_in` (
 A Silver rebuild from Bronze (`silver_rebuild`) removes the refreshed rows; run the refresh again after one.
 
 ## Alerts and weekly digest (5.12)
-Four kinds of mail, each to the people who act on it:
+Kinds of mail, each to the people who act on it (from go-live, 5.13, Management also gets test/prod failures and alerts):
 
 | Mail | Sent by | When |
 |---|---|---|
@@ -78,6 +78,8 @@ Four kinds of mail, each to the people who act on it:
 | figures delayed / up to date again, FQF merged | `ci/notices.py` (`notices.yml`) | business notice, once each |
 | data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed |
 | weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, mails sent |
+| dev activity | `ci/alerts.py --env dev --dev-activity` (daily 20:45 IST) | every dev job run of the day, to Developer and Team Lead (requirement 10) |
+| your own dev run | Databricks (`config/jobs.yml` notify.dev) | each person's dev job mails only its owner, on failure and on success |
 
 Rules and recipients: `config/alerts.yml`. Each finding is mailed once (`ops.notice_log`, `alert_<kind>`); the
 scheduled run is quiet until `live` is switched on at go-live. Alerts read only the health views
