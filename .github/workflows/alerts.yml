@@ -3,8 +3,9 @@ name: alerts
 # 5.12: operational alerts and the weekly digest (same file in both repos), sent by ci/alerts.py.
 # Every two hours (30 minutes after the business notices) it looks at the health views and mails new findings once:
 # refused files, Silver rebuilt, quarantine spike, new source columns, and in BHG group merge waiting and
-# over-limit customers. Monday 09:15 IST: weekly digest. Rules and recipients: config/alerts.yml.
-# Scheduled runs use env prod and stay quiet until config/alerts.yml live is switched on at go-live (5.13).
+# over-limit customers. Monday 09:15 IST: weekly digest. Daily 20:45 IST: dev activity (requirement 10: every
+# dev job run of the day, to Developer and Team Lead). Rules and recipients: config/alerts.yml.
+# Scheduled runs use env prod (dev activity: env dev) and stay quiet until config/alerts.yml live is on (5.13).
 # Databricks access: service principal sp_lh_notices (group lh_ci, read-only grants), never the admin token.
 # By hand: Actions -> alerts -> Run workflow; choose env, what and mode (dry-run = print only, send nothing).
 
@@ -12,15 +13,17 @@ on:
   schedule:
     - cron: "45 22,0,2,4,6,8,10,12,14 * * *"   # UTC = 04:15 IST, then every 2 h until 20:15 IST
     - cron: "45 3 * * 1"                       # Monday 09:15 IST: weekly digest
+    - cron: "15 15 * * *"                      # daily 20:45 IST: dev activity
   workflow_dispatch:
     inputs:
       env:
         type: choice
-        options: [prod, test]
+        options: [prod, test, dev]
         default: test
       what:
         type: choice
-        options: [alerts, digest]
+        description: alerts / digest (env test or prod) or dev-activity (env dev)
+        options: [alerts, digest, dev-activity]
         default: alerts
       mode:
         type: choice
@@ -56,8 +59,8 @@ jobs:
           MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
           MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
           MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
-          ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.env || 'prod' }}
-          WHAT: ${{ github.event_name == 'workflow_dispatch' && inputs.what || (github.event.schedule == '45 3 * * 1' && 'digest' || 'alerts') }}
+          ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.env || (github.event.schedule == '15 15 * * *' && 'dev' || 'prod') }}
+          WHAT: ${{ github.event_name == 'workflow_dispatch' && inputs.what || (github.event.schedule == '45 3 * * 1' && 'digest' || (github.event.schedule == '15 15 * * *' && 'dev-activity' || 'alerts')) }}
           MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'send' }}
           SCHEDULED: ${{ github.event_name == 'schedule' && 'yes' || 'no' }}
         run: |
@@ -67,5 +70,6 @@ jobs:
             sample)  flags="--sample" ;;
           esac
           [ "$WHAT" = digest ] && flags="$flags --digest"
+          [ "$WHAT" = dev-activity ] && flags="$flags --dev-activity"
           [ "$SCHEDULED" = yes ] && flags="$flags --scheduled"
           python ci/alerts.py --env "$ENV" $flags

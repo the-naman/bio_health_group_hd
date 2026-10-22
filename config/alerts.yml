@@ -3,12 +3,13 @@
 # out in one mail; every finding is sent once (recorded in <catalog>.ops.notice_log as alert_<kind>).
 # Not repeated here: a failed task (Databricks mails the fixers, config/jobs.yml notify) and "figures delayed"
 # (business notice, config/jobs.yml business_notice). The digest counts them.
-live: {test: false, prod: false}          # scheduled runs stay quiet until go-live (5.13 switches prod on)
+live: {dev: false, test: false, prod: false}   # scheduled runs stay quiet until go-live (5.13 switches them on)
 roles:                                    # who gets the alerts (MAIL_<ROLE> GitHub secrets)
-  test: [developer, teamlead, manager]
-  prod: [developer, teamlead, manager]
+  test: [developer, teamlead, manager, management]
+  prod: [developer, teamlead, manager, management]
+dev_activity_roles: [developer, teamlead] # requirement 10: daily digest of everyone's dev job runs (20:45 IST)
 digest_roles:                             # who gets the weekly digest (Monday 09:15 IST)
-  test: [developer, teamlead, manager]
+  test: [developer, teamlead, manager, management]
   prod: [developer, teamlead, manager, management]
 lookback_days: 3                          # how far back rejected files and Silver rebuilds are looked at
 quarantine_spike:                         # new quarantine rows on the latest day vs the 7 days before it
