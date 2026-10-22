@@ -1,0 +1,71 @@
+name: alerts
+
+# 5.12: operational alerts and the weekly digest (same file in both repos), sent by ci/alerts.py.
+# Every two hours (30 minutes after the business notices) it looks at the health views and mails new findings once:
+# refused files, Silver rebuilt, quarantine spike, new source columns, and in BHG group merge waiting and
+# over-limit customers. Monday 09:15 IST: weekly digest. Rules and recipients: config/alerts.yml.
+# Scheduled runs use env prod and stay quiet until config/alerts.yml live is switched on at go-live (5.13).
+# Databricks access: service principal sp_lh_notices (group lh_ci, read-only grants), never the admin token.
+# By hand: Actions -> alerts -> Run workflow; choose env, what and mode (dry-run = print only, send nothing).
+
+on:
+  schedule:
+    - cron: "45 22,0,2,4,6,8,10,12,14 * * *"   # UTC = 04:15 IST, then every 2 h until 20:15 IST
+    - cron: "45 3 * * 1"                       # Monday 09:15 IST: weekly digest
+  workflow_dispatch:
+    inputs:
+      env:
+        type: choice
+        options: [prod, test]
+        default: test
+      what:
+        type: choice
+        options: [alerts, digest]
+        default: alerts
+      mode:
+        type: choice
+        description: dry-run = print, send nothing; sample = print every alert with today's data; send = for real
+        options: [dry-run, sample, send]
+        default: dry-run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alerts-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  alerts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pyyaml databricks-sdk==0.143.0
+      - name: Look at the health views, send what is new
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.LH_NOTICES_CLIENT_ID }}          # service principal sp_lh_notices (group lh_ci):
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.LH_NOTICES_CLIENT_SECRET }}  # read-only, never the admin token
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.env || 'prod' }}
+          WHAT: ${{ github.event_name == 'workflow_dispatch' && inputs.what || (github.event.schedule == '45 3 * * 1' && 'digest' || 'alerts') }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'send' }}
+          SCHEDULED: ${{ github.event_name == 'schedule' && 'yes' || 'no' }}
+        run: |
+          flags=""
+          case "$MODE" in
+            dry-run) flags="--dry-run" ;;
+            sample)  flags="--sample" ;;
+          esac
+          [ "$WHAT" = digest ] && flags="$flags --digest"
+          [ "$SCHEDULED" = yes ] && flags="$flags --scheduled"
+          python ci/alerts.py --env "$ENV" $flags

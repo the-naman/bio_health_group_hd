@@ -12,7 +12,7 @@ its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same env
 | `bi/` | BI views and AI/BI dashboards (published per environment) |
 | `jobs/` | the daily job as code (`config/jobs.yml`) |
 | `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix) |
-| `ci/`, `.github/workflows/` | promotion checks, approval notices, deploy after a merge |
+| `ci/`, `.github/workflows/` | promotion checks, approval notices, deploy after a merge, business notices, alerts and the weekly digest |
 | `config/` | every setting, per environment. No secrets: they live in GitHub secrets and Databricks secret scopes |
 | `setup_once/` | one-time environment setup and access grants (admin) |
 
@@ -68,3 +68,20 @@ files into the target's `ops.refresh_in`; the target adds them to its Silver (it
 3. Check: `checks/t31_refresh` with env = test.
 For dev: same with target = dev; then each person runs `refresh/02_refresh_in` (env dev) and their own dev job.
 A Silver rebuild from Bronze (`silver_rebuild`) removes the refreshed rows; run the refresh again after one.
+
+## Alerts and weekly digest (5.12)
+Four kinds of mail, each to the people who act on it:
+
+| Mail | Sent by | When |
+|---|---|---|
+| a task failed | Databricks (`config/jobs.yml` notify) | at once, to the fixers |
+| figures delayed / up to date again, FQF merged | `ci/notices.py` (`notices.yml`) | business notice, once each |
+| data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed |
+| weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, mails sent |
+
+Rules and recipients: `config/alerts.yml`. Each finding is mailed once (`ops.notice_log`, `alert_<kind>`); the
+scheduled run is quiet until `live` is switched on at go-live. Alerts read only the health views
+(`gold.v_health_*`) and the ops logs as `sp_lh_notices`; no personal values, no row keys. The new-column watch
+(`src/lh/observe.py`, run by `bi/01_create_views`) keeps only the column NAMES found in Bronze `_rescued_data`
+(`ops.rescued_keys`); a new name is planned by adding it to `from_rescued` in `config/silver.yml` through a PR.
+Try it: Actions -> **alerts** -> Run workflow, env test, what alerts or digest, mode dry-run or sample.
