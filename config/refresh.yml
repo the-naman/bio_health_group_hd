@@ -1,0 +1,10 @@
+# 5.11 controlled refresh (src/lh/refresh.py). Started only through the refresh workflow (approval required).
+# test gets half of the prod people, dev a tenth of the test people; all rows of a picked person come along.
+flows:
+  test: {from: prod, pct: 50}
+  dev:  {from: test, pct: 10}
+person: {table: patients, key: patient_id, sample_by: aadhaar}   # picked by national id -> same people as FQF
+fake:               # silver table -> column -> name / aadhaar / phone / date / round / token (ids: config/privacy.yml)
+  patients: {aadhaar: aadhaar, full_name: name, phone: phone, dob: date}
+  doctors:  {full_name: name, phone: phone}
+  payments: {payment_ref: token}

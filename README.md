@@ -55,3 +55,16 @@ name, phone, Aadhaar or date of birth anywhere.
 3. The next daily run applies it (`gold/sql/group/_grp_decisions.sql`): a `same` pair becomes one person
    (`match_method = review`) and leaves the review list; a `different` pair stays listed as `decided`.
    To change a decision, insert a new row for the same `review_key`: the latest one wins.
+
+## Controlled refresh (5.11)
+Test and dev can get a safe copy of real-looking data: prod -> test (half of the people), test -> dev (a tenth).
+Rules in `config/refresh.yml`, logic in `src/lh/refresh.py`. People are picked by a keyed hash of their national id
+(the same people in BHG and FQF) with all their rows; reference rows come complete. Personal values are faked, the ids
+of `config/privacy.yml` are re-keyed with a secret key, amounts are kept. The source job account writes only sanitised
+files into the target's `ops.refresh_in`; the target adds them to its Silver (its own rows stay) and rebuilds Gold.
+1. Actions -> **refresh** -> Run workflow, "Use workflow from" = the prod branch, target = test. Approve the
+   `<code>_refresh` environment. Do FQF first, then BHG.
+2. The workflow runs `refresh/01_refresh_out` (source), `refresh/02_refresh_in` and the normal test job (target).
+3. Check: `checks/t31_refresh` with env = test.
+For dev: same with target = dev; then each person runs `refresh/02_refresh_in` (env dev) and their own dev job.
+A Silver rebuild from Bronze (`silver_rebuild`) removes the refreshed rows; run the refresh again after one.

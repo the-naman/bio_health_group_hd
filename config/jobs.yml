@@ -26,6 +26,9 @@ permissions:   # groups only; the owner is the person (dev) or the job account (
 # 5.10: dev = one job per person. Whoever works in dev deploys their own copy, lh_<code>_dev_daily_<role>, from their
 # own Git folder; it runs as them and only they get its mails. Others may only view it. The role comes from the group.
 dev_roles: {lh_developer: developer, lh_teamlead: teamlead, lh_manager: manager}
+# Requirement 10: development and testing in dev are communicated Developer <-> Team Lead. When one of them runs
+# their dev job, the other gets the result by mail (success and failure); the owner still gets only failures.
+dev_inform: {developer: [teamlead], teamlead: [developer]}
 # 5.10: failure emails, tier 1 = technical mail straight from Databricks to the people who fix it (any failed task,
 # including a failed Silver checkpoint that starts the rebuild). Addresses never live in Git: GitHub secrets MAIL_* ->
 # secret scope lh_<env> (keys mail_<role>, written by the setup-secret-scopes workflow) -> job settings at deploy time.
