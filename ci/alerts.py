@@ -13,10 +13,15 @@ Not repeated: a failed task (Databricks mails the fixers) and "figures delayed" 
 
 Digest (Monday 09:15 IST): runs and failures of the week, freshness, quarantine, new columns, merge and group
 numbers (BHG), alerts and notices sent. Once per ISO week.
+
+Dev activity (daily 20:45 IST, requirement 10: Developer <-> Team Lead): every run of the per-person dev jobs
+lh_<code>_dev_daily_<role> in the last 24 hours, with result, duration and failed tasks; no runs = no mail. Read from
+the Jobs API only (lh_ci has Can View on the dev jobs), no data. Roles: config/alerts.yml dev_activity_roles.
     python ci/alerts.py --env prod                      # check and send new alerts
     python ci/alerts.py --env test --dry-run            # print what would be sent, send and record nothing
     python ci/alerts.py --env test --sample             # print every alert with today's data, even if sent before
     python ci/alerts.py --env prod --digest [--dry-run]
+    python ci/alerts.py --env dev --dev-activity [--dry-run]
     --scheduled                                         # used by the schedule: quiet until config live: true
 """
 import argparse, os, smtplib, ssl, sys, time
@@ -27,8 +32,9 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem, StatementState
 
 p = argparse.ArgumentParser()
-p.add_argument("--env", required=True, choices=["test", "prod"])
+p.add_argument("--env", required=True, choices=["dev", "test", "prod"])
 p.add_argument("--digest", action="store_true")
+p.add_argument("--dev-activity", action="store_true")
 p.add_argument("--dry-run", action="store_true")
 p.add_argument("--sample", action="store_true")
 p.add_argument("--scheduled", action="store_true")
@@ -37,15 +43,69 @@ a = p.parse_args()
 company = yaml.safe_load(open("config/company.yml"))
 code, name = company["code"], company["name"]
 acfg = yaml.safe_load(open("config/alerts.yml"))
+if (a.env == "dev") != a.dev_activity:
+    sys.exit("--dev-activity goes with --env dev, and --env dev only with --dev-activity")
 if a.scheduled and not acfg["live"].get(a.env):
     print(f"{a.env}: not live yet (config/alerts.yml live), nothing to do")
     sys.exit(0)
-roles = acfg["digest_roles" if a.digest else "roles"][a.env]
+roles = (acfg["dev_activity_roles"] if a.dev_activity else acfg["digest_roles" if a.digest else "roles"][a.env])
 cat = f"{code}_{a.env}"
 IST = timezone(timedelta(hours=5, minutes=30))
 now = datetime.now(IST)
 today = now.strftime("%Y-%m-%d")
 w = WorkspaceClient()
+
+
+def mail(subject, body):
+    """One mail to the roles (nothing recorded); dry run / sample only prints."""
+    print(f"\n--- to {', '.join(roles)}\nSubject: [{name} {a.env}] {subject}\n{body}")
+    if a.dry_run or a.sample:
+        print("(not sent: dry run)")
+        return
+    to = []
+    for r in roles:
+        addr = os.environ.get(f"MAIL_{r.upper()}", "")
+        if addr.count("@") != 1:
+            sys.exit(f"MAIL secret for {r} is missing")
+        to.append(addr)
+    msg = EmailMessage()
+    msg["Subject"] = f"[{name} {a.env}] {subject}"
+    msg["From"] = os.environ["SMTP_USER"]
+    msg["To"] = ", ".join(sorted(set(to)))
+    msg.set_content(body + "\n\n-- Lakehouse operations alert. Please do not reply.")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
+        s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
+        s.send_message(msg)
+    print(f"mail sent to {', '.join(roles)}")
+
+
+# ---------------------------------------------------------------- daily dev activity (requirement 10)
+if a.dev_activity:
+    prefix = f"lh_{code}_dev_daily_"
+    since = (time.time() - 24 * 3600) * 1000
+    lines, n_ok, n_bad = [], 0, 0
+    for job in sorted((j for j in w.jobs.list() if (j.settings and j.settings.name or "").startswith(prefix)),
+                      key=lambda j: j.settings.name):
+        owner = job.settings.name[len(prefix):]
+        for r in w.jobs.list_runs(job_id=job.job_id, start_time_from=int(since), expand_tasks=True):
+            st = r.state
+            res = (st.result_state.value if st and st.result_state else (st.life_cycle_state.value if st and st.life_cycle_state else "?"))
+            mins = f"{(r.end_time - r.start_time) / 60000:.0f} min" if r.end_time and r.start_time else "running"
+            bad = sorted({t.task_key for t in (r.tasks or []) if t.state and t.state.result_state
+                          and t.state.result_state.value not in ("SUCCESS", "EXCLUDED")})
+            ok = res == "SUCCESS"
+            n_ok, n_bad = n_ok + ok, n_bad + (not ok)
+            when = datetime.fromtimestamp(r.start_time / 1000, IST).strftime("%d %b %H:%M IST")
+            lines.append(f"  {owner:10} {when}  {res:10} {mins:>9}" + (f"  tasks not ok: {', '.join(bad)}" if bad else ""))
+    print(f"dev activity: {len(lines)} run(s) in the last 24 h")
+    if not lines:
+        print("dev activity: nothing to send")
+        sys.exit(0)
+    mail(f"Dev activity: {len(lines)} run(s), {n_bad} not successful",
+         f"Dev job runs of {name} in the last 24 hours (each person's own dev job, newest data in their own Git folder):\n\n"
+         + "\n".join(lines) + "\n\nDetails: Jobs & Pipelines -> lh_" + code + "_dev_daily_<role> -> the run.")
+    sys.exit(0)
+
 wh_name = yaml.safe_load(open("config/bi.yml"))["warehouse"]
 wh = [x.id for x in w.warehouses.list() if x.name == wh_name]
 if len(wh) != 1:

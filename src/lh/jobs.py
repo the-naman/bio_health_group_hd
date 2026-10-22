@@ -8,7 +8,8 @@ build() turns the config into Jobs API settings for one company and environment:
     test/prod: schedule (paused until go-live) and run as the environment's job account
   - silver_rebuild runs only if silver fails; masks (then gold) run if either of them succeeded
   - failure emails (tier 1, 5.10): dev = only the person whose job it is; test/prod = the roles in notify.<env>;
-  - requirement 10: a Developer's or Team Lead's dev run is reported to the other one (dev_inform), success and failure;
+  - dev success emails (5.13): the person whose job it is hears about every run, success too; optional dev_inform
+    adds other roles (empty since go-live: requirement 10 is the daily dev-activity digest, ci/alerts.py);
     the addresses come from the secret scope lh_<env> at deploy time
 deploy() creates or updates the job by name and sets its permissions exactly. plan mode changes nothing.
 Folder paths, job-account IDs and mail addresses are looked up at deploy time, so no person or ID is stored in the repo."""
@@ -70,7 +71,7 @@ def recipients(cfg, env, role=None):
 
 
 def informed(cfg, env, role=None):
-    """Requirement 10: the roles told about this person's dev runs (success and failure). Empty outside dev."""
+    """Other roles told about this person's dev runs (success and failure), from dev_inform. Empty outside dev."""
     return list(cfg.get("dev_inform", {}).get(role, [])) if env == "dev" else []
 
 
@@ -79,9 +80,10 @@ def notify_plan(cfg, code, env, role=None):
     No addresses here."""
     who = recipients(cfg, env, role)
     told = informed(cfg, env, role)
+    mine = who if env == "dev" else []                  # 5.13: in dev the owner also hears about a success
     return {"job": who + [r for r in told if r not in who],
             "tasks": {t["key"]: who for t in tasks_for(cfg, code) if t.get("notify")},
-            "success": told}
+            "success": mine + [r for r in told if r not in mine]}
 
 
 def mail_roles(cfg, env, role=None):
@@ -175,7 +177,7 @@ def build(cfg, code, env, home, run_as_id=None, mail=None, role=None):
                 "tasks": out_tasks}
     if mail:
         settings["email_notifications"] = {"on_failure": [mail[r] for r in plan["job"]]}
-        if plan["success"]:                                   # requirement 10: the other one hears about every dev run
+        if plan["success"]:                                   # dev: the owner (and dev_inform roles) hear about every run
             settings["email_notifications"]["on_success"] = [mail[r] for r in plan["success"]]
         settings["notification_settings"] = {"no_alert_for_skipped_runs": True, "no_alert_for_canceled_runs": True}
     if env != "dev":
