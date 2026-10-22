@@ -5,7 +5,8 @@ build() turns the config into Jobs API settings for one company and environment:
     follows gold there)
   - every task is a notebook in that environment's own Git folder, with the env as a parameter
   - dev: one job per person (lh_<code>_dev_daily_<role>), no schedule, runs as that person from their own Git folder;
-    test/prod: schedule (paused until go-live) and run as the environment's job account
+    test/prod: schedule per environment (schedule_of; staggered so test never runs with prod) and run as the
+    environment's job account; paused: true in config/jobs.yml pauses every schedule
   - silver_rebuild runs only if silver fails; masks (then gold) run if either of them succeeded
   - failure emails (tier 1, 5.10): dev = only the person whose job it is; test/prod = the roles in notify.<env>;
   - dev success emails (5.13): the person whose job it is hears about every run, success too; optional dev_inform
@@ -63,6 +64,12 @@ def my_role(cfg, env, is_member):
     if len(roles) != 1:
         raise ValueError(f"dev jobs are deployed by one role login (Developer, Team Lead or Manager); found {roles or 'none'}")
     return roles[0]
+
+
+def schedule_of(cfg, code, env):
+    """Quartz cron of one company in one environment: schedule.<env>.<code> (or the older flat schedule.<code>)."""
+    s = cfg["schedule"]
+    return s[env][code] if env in s else s[code]
 
 
 def recipients(cfg, env, role=None):
@@ -184,7 +191,7 @@ def build(cfg, code, env, home, run_as_id=None, mail=None, role=None):
         if not run_as_id:
             raise ValueError(f"{env} needs the job account's application id")
         settings["run_as"] = {"service_principal_name": run_as_id}
-        settings["schedule"] = {"quartz_cron_expression": cfg["schedule"][code], "timezone_id": cfg["timezone"],
+        settings["schedule"] = {"quartz_cron_expression": schedule_of(cfg, code, env), "timezone_id": cfg["timezone"],
                                 "pause_status": "PAUSED" if cfg["paused"] else "UNPAUSED"}
     return settings
 

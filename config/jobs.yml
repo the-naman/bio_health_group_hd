@@ -5,8 +5,10 @@ repo: {bhg: bio_health_group_hd, fqf: flexi_quant_finance_fd}
 folder: {dev: "{repo}", test: "{repo}_test", prod: "{repo}_prod"}   # Git folder in the deployer's home
 run_as: {dev: deployer, test: "sp_{code}_test", prod: "sp_{code}_prod"}
 timezone: Asia/Kolkata
-schedule: {fqf: "0 0 2 * * ?", bhg: "0 30 2 * * ?"}   # 02:00 and 02:30 IST, test/prod only; dev runs on demand
-paused: true                                          # switched on at go-live (5.13)
+schedule:                                             # test/prod only (dev runs on demand); BHG 30 min after FQF
+  prod: {fqf: "0 0 2 * * ?", bhg: "0 30 2 * * ?"}       # 02:00 and 02:30 IST (simulator writes at 00:30)
+  test: {fqf: "0 30 3 * * ?", bhg: "0 0 4 * * ?"}       # 03:30 and 04:00 IST: staggered, never 4 runs at once
+paused: false                                         # live since go-live (5.13, 23 Oct 2026); true = pause all
 job_timeout_minutes: 150
 tasks:
   - {key: bronze, notebook: bronze/01_load_bronze, timeout: 30, retries: 1}
@@ -35,8 +37,8 @@ dev_inform: {}
 # secret scope lh_<env> (keys mail_<role>, written by the setup-secret-scopes workflow) -> job settings at deploy time.
 notify:
   dev: [self]                               # only the person whose dev job it is
-  test: [developer, teamlead, manager]      # the team under the Manager
-  prod: [developer, teamlead, manager]      # the fixers
+  test: [developer, teamlead, manager, management]   # the team under the Manager + Management (5.13)
+  prod: [developer, teamlead, manager, management]   # the fixers + Management (5.13)
 # 5.10/10e: tier 2 = plain-language business notice, sent by .github/workflows/notices.yml (ci/notices.py) from the
 # MAIL_* secrets, not by Databricks: "today's figures are delayed" when a task below did not finish, "up to date again"
 # after the next good run, and (BHG) what was merged from FQF into the group figures. Each notice is sent once.
