@@ -3,7 +3,7 @@
 # out in one mail; every finding is sent once (recorded in <catalog>.ops.notice_log as alert_<kind>).
 # Not repeated here: a failed task (Databricks mails the fixers, config/jobs.yml notify) and "figures delayed"
 # (business notice, config/jobs.yml business_notice). The digest counts them.
-live: {dev: false, test: false, prod: false}   # scheduled runs stay quiet until go-live (5.13 switches them on)
+live: {dev: true, test: true, prod: true}      # live since go-live (5.13, 23 Oct 2026); false = scheduled runs quiet
 roles:                                    # who gets the alerts (MAIL_<ROLE> GitHub secrets)
   test: [developer, teamlead, manager, management]
   prod: [developer, teamlead, manager, management]
