@@ -1,0 +1,26 @@
+# 5.14: real-time payment events (same file in both repos; only FQF has the stream). Rules for src/lh/stream.py,
+# stream/producer.py and the stream job. No secrets here: passwords and the CA certificate live in GitHub secrets
+# (producer) and the secret scopes lh_<env> (keys kafka_bootstrap, kafka_ca_cert, kafka_password; consumers).
+companies: [fqf]
+topic: fqf_payment_events_{env}          # one topic per environment on the free Aiven Kafka service lh-kafka-service
+consumer_user: lh_consumer_{env}         # read-only on its own topic (Aiven ACL)
+producer_user: lh_producer               # write-only on fqf_payment_events_* (Aiven ACL), used by GitHub Actions
+max_offsets_per_run: 20000               # upper bound of events one run reads
+watermark: 15 minutes                    # events older than the newest event minus this are too late (dropped)
+window: 10 minutes                       # failed payments are counted per customer in 10-minute windows
+alert_failed: 3                          # 3 or more failed payments in one window = velocity alert
+producer:
+  live: {dev: false, test: true, prod: true}   # scheduled sends (dev only by hand)
+  events: 300                            # per run; plus planted cases: duplicates, late events, a failure burst, bad JSON
+# The stream job, built by src/lh/jobs.py from config/jobs.yml with these keys replaced (same permissions, mails,
+# job accounts and Git folders as the daily job). availableNow runs: read what arrived, stop (Free Edition, no 24/7).
+job:
+  name: lh_{code}_{env}_stream
+  job_timeout_minutes: 30
+  schedule:                              # IST; never during the daily runs (03:00-06:30)
+    prod: {fqf: "0 30 7-21/2 * * ?"}     # 07:30, 09:30 ... 21:30 (producer sends 30 minutes before)
+    test: {fqf: "0 50 8-20/6 * * ?"}     # 08:50, 14:50, 20:50
+  tasks:
+    - {key: stream_bronze, notebook: stream/01_run_stream, params: {layer: bronze}, companies: [fqf], timeout: 15, retries: 1}
+    - {key: stream_silver, notebook: stream/01_run_stream, params: {layer: silver}, after: [stream_bronze], companies: [fqf], timeout: 15, retries: 1}
+    - {key: stream_gold, notebook: stream/01_run_stream, params: {layer: gold}, after: [stream_silver], companies: [fqf], timeout: 15, retries: 1}

@@ -9,6 +9,7 @@ Alerts (every two hours; all new findings in one mail; each finding sent once vi
   rescued      a source sends a column nobody planned for (Bronze _rescued_data, view v_health_rescued)
   backlog      BHG: FQF days waiting too long to be merged into the group figures
   over_limit   BHG: the number of people owing the group more than the policy limit changed
+  velocity     FQF (5.14): a customer had too many failed payments in one 10-minute window (gold.payment_failure_windows)
 Not repeated: a failed task (Databricks mails the fixers) and "figures delayed" (ci/notices.py).
 
 Digest (Monday 09:15 IST): runs and failures of the week, freshness, quarantine, new columns, merge and group
@@ -271,6 +272,14 @@ if code == "bhg" and exists("gold", "v_group_kpi"):
             found.append(("over_limit", f"{n}@{today}", f"People owing the group more than the policy limit: {n} "
                           f"(was {p_n}). Details: dashboard group_overview_{a.env}, view v_group_exposure."))
 
+if exists("gold", "payment_failure_windows"):
+    for ws, cust, n, amt in sql(f"""SELECT CAST(window_start AS STRING), customer_ref, CAST(failed_payments AS STRING),
+                                          CAST(failed_amount AS STRING) FROM gold.payment_failure_windows
+                                   WHERE is_alert AND window_start >= current_timestamp() - INTERVAL {days} DAYS
+                                   ORDER BY window_start"""):
+        found.append(("velocity", f"{ws}|{cust}", f"{cust}: {num(n)} failed payments ({float(amt or 0):,.2f} INR) in the "
+                      f"10 minutes from {ist(ws)}. Check the customer's payment method before the next instalment."))
+
 if not a.sample:
     done = {(x, y) for x, y in sql("SELECT notice, ref FROM ops.notice_log WHERE notice LIKE 'alert_%'")}
     found = [f for f in found if (f"alert_{f[0]}", f[1]) not in done]
@@ -279,7 +288,7 @@ if not found:
     sys.exit(0)
 titles = {"rejected": "Files refused by Bronze", "rebuild": "Silver rebuilt from Bronze",
           "quarantine": "Quarantine spike", "rescued": "New source columns", "backlog": "Group merge waiting",
-          "over_limit": "Over-limit customers"}
+          "over_limit": "Over-limit customers", "velocity": "Failed-payment velocity"}
 body = []
 for kind in titles:
     items = [t for k, _, t in found if k == kind]
