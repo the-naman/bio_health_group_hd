@@ -112,3 +112,10 @@ When something goes wrong:
   Management opens the job -> Permissions, sets `sp_bhg_<env>` = Is Owner and `sp_lh_deploy` = Can Manage, Save,
   then re-runs the failed deploy in GitHub Actions (Re-run all jobs).
 - A stuck GitHub check: open the run and use "Re-run all jobs".
+
+## Working on this repo (standards)
+- Branch `<code>_dev`, run your own dev job, then open a pull request; the PR template lists what to check.
+- `python ci/checks.py` runs the same 8 checks as CI: compile, no notebook outputs, YAML, job config, dashboards,
+  no email or token, and ruff lint and format (rules in `pyproject.toml`; run `ruff format .` before committing).
+- Shared code (`src/lh`, `ci`, `simulator`, most workflows) must stay identical in both repos.
+- Why things are built the way they are: `docs/adr/` (decision records). What changed when: `CHANGELOG.md`.

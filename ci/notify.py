@@ -7,8 +7,15 @@ MAIL_<ROLE> environment variables (GitHub secrets). Addresses and the password a
 For --event deployed, RESULT (set by deploy.yml to the job status) other than "success" sends to the roles under
 deploy_failed instead (audit B1: a failed deploy goes to the fixers, not to business users).
 """
-import argparse, os, smtplib, ssl, sys
+
+import argparse
+import os
+import smtplib
+import ssl
+import sys
 from email.message import EmailMessage
+from pathlib import Path
+
 import yaml
 
 p = argparse.ArgumentParser()
@@ -19,8 +26,8 @@ p.add_argument("--subject", required=True)
 p.add_argument("--body", required=True)
 a = p.parse_args()
 
-code = yaml.safe_load(open("config/company.yml"))["code"]
-ci = yaml.safe_load(open("config/ci.yml"))
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
+ci = yaml.safe_load(Path("config/ci.yml").read_text())
 if a.flow == "hotfix":
     roles = ci["hotfix"]["backmerge"] if a.event == "backmerge" else ci["hotfix"][a.env][a.event]
 else:

@@ -29,6 +29,7 @@ How people are matched (only keyed hashes are read, never names, phones or dates
      review_key (ids are tokens in test/prod), gold/sql/group/_grp_decisions.sql turns it back into the pair
 Look-alikes are never merged automatically.
 """
+
 import os
 from datetime import date, datetime, timedelta
 
@@ -64,7 +65,7 @@ def decisions(spark, cat):
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {cat}.{DECISIONS} (
         bhg_patient_id STRING, fqf_customer_id STRING, decision STRING, decided_by STRING, decided_at TIMESTAMP,
         review_key BIGINT)""")
-    if "review_key" not in spark.table(f"{cat}.{DECISIONS}").columns:   # tables made before review_key existed
+    if "review_key" not in spark.table(f"{cat}.{DECISIONS}").columns:  # tables made before review_key existed
         spark.sql(f"ALTER TABLE {cat}.{DECISIONS} ADD COLUMNS (review_key BIGINT)")
     spark.sql(f"GRANT SELECT, MODIFY ON TABLE {cat}.{DECISIONS} TO `lh_manager`")
     return spark.table(f"{cat}.{DECISIONS}").filter(F.col("decision").isin("same", "different"))
@@ -74,8 +75,12 @@ def data_to(fact, exclude=()):
     """Last business date a company fact holds, up to today. Planned rows (instalments due) are left
     out, and so is any row dated in the future (a bad source date must not fake a later delivery)."""
     today = int(date.today().strftime("%Y%m%d"))
-    k = (fact.filter(~F.col("event_type").isin(*exclude) if exclude else F.lit(True))
-             .filter(F.col("date_key") <= today).agg(F.max("date_key")).first()[0])
+    k = (
+        fact.filter(~F.col("event_type").isin(*exclude) if exclude else F.lit(True))
+        .filter(F.col("date_key") <= today)
+        .agg(F.max("date_key"))
+        .first()[0]
+    )
     return datetime.strptime(str(k), "%Y%m%d").date() if k else None
 
 
@@ -93,7 +98,11 @@ def merge_control(spark, cfg, env, built):
     f_ts = ffact.agg(F.max("_gold_ts")).first()[0]
     prev = spark.sql(f"SELECT max_by(fqf_data_to, run_ts) FROM {cat}.ops.merge_log WHERE env = '{env}'").first()[0]
 
-    missing = [(b_to - timedelta(days=i)).isoformat() for i in range((b_to - f_to).days)] if b_to and f_to and b_to > f_to else []
+    missing = (
+        [(b_to - timedelta(days=i)).isoformat() for i in range((b_to - f_to).days)]
+        if b_to and f_to and b_to > f_to
+        else []
+    )
     if missing:
         spark.createDataFrame([(d,) for d in missing], "d string").createOrReplaceTempView("_missing")
         spark.sql(f"""MERGE INTO {cat}.ops.merge_backlog t
@@ -105,13 +114,35 @@ def merge_control(spark, cfg, env, built):
                   WHERE status = 'waiting' AND business_date <= DATE'{f_to.isoformat()}'""")
     waiting = spark.sql(f"SELECT count(*) FROM {cat}.ops.merge_backlog WHERE status = 'waiting'").first()[0]
 
-    row = {"env": env, "bhg_data_to": b_to, "fqf_data_to": f_to, "fqf_gold_ts": f_ts,
-           "new_fqf_days": (f_to - prev).days if prev and f_to else None, "backlog_days": waiting,
-           "status": "complete" if waiting == 0 else "fqf_behind", "tables": str(built)}
-    (spark.createDataFrame([row], "env string, bhg_data_to date, fqf_data_to date, fqf_gold_ts timestamp, "
-                                  "new_fqf_days int, backlog_days int, status string, tables string")
-          .withColumn("run_ts", F.current_timestamp())
-          .select("run_ts", "env", "bhg_data_to", "fqf_data_to", "fqf_gold_ts", "new_fqf_days", "backlog_days",
-                  "status", "tables")
-          .write.mode("append").saveAsTable(f"{cat}.ops.merge_log"))
+    row = {
+        "env": env,
+        "bhg_data_to": b_to,
+        "fqf_data_to": f_to,
+        "fqf_gold_ts": f_ts,
+        "new_fqf_days": (f_to - prev).days if prev and f_to else None,
+        "backlog_days": waiting,
+        "status": "complete" if waiting == 0 else "fqf_behind",
+        "tables": str(built),
+    }
+    (
+        spark.createDataFrame(
+            [row],
+            "env string, bhg_data_to date, fqf_data_to date, fqf_gold_ts timestamp, "
+            "new_fqf_days int, backlog_days int, status string, tables string",
+        )
+        .withColumn("run_ts", F.current_timestamp())
+        .select(
+            "run_ts",
+            "env",
+            "bhg_data_to",
+            "fqf_data_to",
+            "fqf_gold_ts",
+            "new_fqf_days",
+            "backlog_days",
+            "status",
+            "tables",
+        )
+        .write.mode("append")
+        .saveAsTable(f"{cat}.ops.merge_log")
+    )
     return row

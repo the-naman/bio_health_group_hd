@@ -1,0 +1,21 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["*.ipynb"]          # notebooks are thin runners; their code is checked by ci/checks.py (compile)
+builtins = ["spark", "dbutils", "display"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "BLE", "S"]
+ignore = [
+  "E501",   # long lines: the formatter decides, SQL strings may stay long
+  "E731",   # small lambdas are used on purpose for one-line helpers
+  "S101",   # assert is used in checks
+  "S311",   # random is for synthetic data only, not security
+  "S608",   # SQL built from config names (catalog, table), never from user input
+  "S603", "S607",  # git and python called by CI with fixed arguments
+  "SIM108", # if/else blocks kept where they read better
+  "B905",   # zip without strict: lengths checked before
+]
+
+[tool.ruff.format]
+quote-style = "preserve"

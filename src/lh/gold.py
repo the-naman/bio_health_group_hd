@@ -14,6 +14,7 @@ is the same on every rebuild. Key -1 is the "unknown" member that a fact points 
 Every Gold table is rebuilt in full from Silver on each run: Silver holds the history, so a rerun always
 gives the same result.
 """
+
 import hashlib
 import hmac
 import os
@@ -33,8 +34,12 @@ def load_gold():
 def save(spark, cfg, name, df):
     """Replace <catalog>.gold.<name> with df and return its row count."""
     target = f"{cfg['catalog']}.gold.{name}"
-    (df.withColumn("_gold_ts", F.current_timestamp())
-       .write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(target))
+    (
+        df.withColumn("_gold_ts", F.current_timestamp())
+        .write.mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(target)
+    )
     return spark.table(target).count()
 
 
@@ -42,11 +47,12 @@ def contact_fingerprint_udf(cat):
     """Keyed hash of phone (last 10 digits) + date of birth, made with the same group match key as
     id_fingerprint. Two companies can then spot the same contact details without either one
     showing a phone number or a date of birth. Registered for SQL as contact_fingerprint(phone, dob)."""
-    key = common.match_key(cat.rsplit("_", 1)[1])          # catalog bhg_dev -> scope lh_dev
+    key = common.match_key(cat.rsplit("_", 1)[1])  # catalog bhg_dev -> scope lh_dev
 
     def fp(phone, dob):
         digits = re.sub(r"\D", "", str(phone or ""))[-10:]
         if len(digits) != 10 or dob is None:
             return None
         return hmac.new(key.encode(), f"{digits}|{dob.isoformat()}".encode(), hashlib.sha256).hexdigest()
+
     return F.udf(fp, "string")

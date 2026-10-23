@@ -8,6 +8,7 @@ Auto Loader keeps one checkpoint per table, so a file is never loaded twice.
 Files are listed and read by one Spark job and moved in parallel, never one by one through the
 volume folder path (that is very slow).
 """
+
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from pyspark.sql import functions as F
 
 from lh import common
 
-cloudpickle.register_pickle_by_value(common)      # lets common.fingerprint run on the Spark workers
+cloudpickle.register_pickle_by_value(common)  # lets common.fingerprint run on the Spark workers
 
 EXT = {"csv": ("csv",), "pipe": ("txt",), "json": ("json",), "binary": ("pdf", "png")}
 
@@ -34,8 +35,13 @@ def list_landing(spark, cfg):
     """One Spark job: every landing file as {(source, table): [(path, bytes), ...]}."""
     root = f"/Volumes/{cfg['catalog']}/bronze/landing/"
     try:
-        rows = (spark.read.format("binaryFile").option("recursiveFileLookup", "true").load(root)
-                .select("path", "content").collect())
+        rows = (
+            spark.read.format("binaryFile")
+            .option("recursiveFileLookup", "true")
+            .load(root)
+            .select("path", "content")
+            .collect()
+        )
     except Exception as e:
         if "PATH_NOT_FOUND" in str(e):
             return {}
@@ -44,7 +50,7 @@ def list_landing(spark, cfg):
     for r in rows:
         path = r["path"].replace("dbfs:", "", 1)
         parts = path.split("/landing/", 1)[1].split("/")
-        if len(parts) >= 3 and not parts[0].startswith("_"):      # skip the simulator's _sim folder
+        if len(parts) >= 3 and not parts[0].startswith("_"):  # skip the simulator's _sim folder
             out.setdefault((parts[0], parts[1]), []).append((path, bytes(r["content"])))
     return out
 
@@ -98,11 +104,13 @@ def _move_all(paths, base, stage):
 def _reader(spark, spec, schema_dir):
     fmt = spec["format"]
     r = spark.readStream.format("cloudFiles")
-    if fmt == "binary":                            # pdf, image: bytes + path, length, modificationTime
+    if fmt == "binary":  # pdf, image: bytes + path, length, modificationTime
         return r.option("cloudFiles.format", "binaryFile")
-    r = (r.option("cloudFiles.schemaLocation", schema_dir)
-          .option("cloudFiles.inferColumnTypes", "false")          # everything as text
-          .option("cloudFiles.schemaEvolutionMode", "rescue"))     # new columns go to _rescued_data
+    r = (
+        r.option("cloudFiles.schemaLocation", schema_dir)
+        .option("cloudFiles.inferColumnTypes", "false")  # everything as text
+        .option("cloudFiles.schemaEvolutionMode", "rescue")
+    )  # new columns go to _rescued_data
     if fmt == "json":
         return r.option("cloudFiles.format", "json")
     # drifting headers: read without a header, the header line stays as a data row for silver
@@ -129,7 +137,7 @@ def load_table(spark, cfg, table, spec, key, landing):
     if spark.catalog.tableExists(target):
         before, last = spark.table(target).agg(F.count("*"), F.max("_business_date")).first()
     daily_start = str(cfg["daily_start"])
-    daily_loaded = last is not None and str(last) >= daily_start     # full-load phase is over
+    daily_loaded = last is not None and str(last) >= daily_start  # full-load phase is over
 
     good, bad = [], []
     for path, data in files:
@@ -139,25 +147,29 @@ def load_table(spark, cfg, table, spec, key, landing):
             common.log_run(spark, cfg, job, "rejected", 0, f"{os.path.basename(path)}: {reason}")
         else:
             good.append(path)
-    _move_all(bad, base, "rejected")               # out of landing before the load starts
+    _move_all(bad, base, "rejected")  # out of landing before the load starts
     if not good:
         return 0, 0, len(bad)
 
     df = _reader(spark, spec, state + "/schema").load(source)
-    df = (df.withColumn("_source_file", F.col("_metadata.file_path"))
-            .withColumn("_business_date",
-                        F.to_date(F.regexp_extract("_source_file", r"_(\d{8})_\d{2}\.\w+$", 1), "yyyyMMdd"))
-            .withColumn("_ingest_ts", F.current_timestamp()))
+    df = (
+        df.withColumn("_source_file", F.col("_metadata.file_path"))
+        .withColumn(
+            "_business_date", F.to_date(F.regexp_extract("_source_file", r"_(\d{8})_\d{2}\.\w+$", 1), "yyyyMMdd")
+        )
+        .withColumn("_ingest_ts", F.current_timestamp())
+    )
     if spec.get("fingerprint"):
         make = common.fingerprint
         fp = F.udf(lambda v: make(v, key) if v else None, "string")
         df = df.withColumn("id_fingerprint", fp(F.col(spec["fingerprint"])))
 
-    query = (df.writeStream.option("checkpointLocation", state + "/checkpoint")
-               .trigger(availableNow=True).toTable(target))
+    query = (
+        df.writeStream.option("checkpointLocation", state + "/checkpoint").trigger(availableNow=True).toTable(target)
+    )
     query.awaitTermination()
     rows = spark.table(target).count() - before
 
     common.log_run(spark, cfg, job, "success", rows, f"{len(good)} files")
-    _move_all(good, base, "processed")             # only after the load and the audit row
+    _move_all(good, base, "processed")  # only after the load and the audit row
     return rows, len(good), len(bad)

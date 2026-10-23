@@ -6,6 +6,7 @@ rescued_keys()  Auto Loader keeps a source column it does not know in Bronze `_r
                 `from_rescued` in config/silver.yml. Values are never copied. ci/alerts.py mails a new, unplanned
                 name once (view gold.v_health_rescued).
 """
+
 import os
 import yaml
 from pyspark.sql import functions as F
@@ -29,25 +30,40 @@ def rescued_keys(spark, cfg):
         if not spark.catalog.tableExists(full):
             continue
         df = spark.table(full)
-        if "_rescued_data" not in df.columns:          # pdf / image tables, or a table read without rescue
+        if "_rescued_data" not in df.columns:  # pdf / image tables, or a table read without rescue
             continue
-        parts.append(df.where("_rescued_data IS NOT NULL")
-                       .select(F.lit(table).alias("table_name"),
-                               F.explode(F.expr("json_object_keys(_rescued_data)")).alias("key"),
-                               F.col("_ingest_ts")))
+        parts.append(
+            df.where("_rescued_data IS NOT NULL").select(
+                F.lit(table).alias("table_name"),
+                F.explode(F.expr("json_object_keys(_rescued_data)")).alias("key"),
+                F.col("_ingest_ts"),
+            )
+        )
     out = spark.createDataFrame([], SCHEMA)
     if parts:
         rows = parts[0]
         for p in parts[1:]:
             rows = rows.unionByName(p)
-        known = F.create_map(*[F.lit(x) for t, keys in planned.items() for k in keys for x in (f"{t}.{k}", True)]) \
-            if any(planned.values()) else None
-        out = (rows.where("key <> '_file_path'")              # Auto Loader adds the file path itself
-                   .groupBy("table_name", "key")
-                   .agg(F.count("*").alias("rows"), F.min("_ingest_ts").alias("first_seen"),
-                        F.max("_ingest_ts").alias("last_seen"))
-                   .withColumn("planned", F.coalesce(known[F.concat_ws(".", "table_name", "key")], F.lit(False))
-                               if known is not None else F.lit(False))
-                   .select(*[c.split()[0] for c in SCHEMA.split(", ")]))
+        known = (
+            F.create_map(*[F.lit(x) for t, keys in planned.items() for k in keys for x in (f"{t}.{k}", True)])
+            if any(planned.values())
+            else None
+        )
+        out = (
+            rows.where("key <> '_file_path'")  # Auto Loader adds the file path itself
+            .groupBy("table_name", "key")
+            .agg(
+                F.count("*").alias("rows"),
+                F.min("_ingest_ts").alias("first_seen"),
+                F.max("_ingest_ts").alias("last_seen"),
+            )
+            .withColumn(
+                "planned",
+                F.coalesce(known[F.concat_ws(".", "table_name", "key")], F.lit(False))
+                if known is not None
+                else F.lit(False),
+            )
+            .select(*[c.split()[0] for c in SCHEMA.split(", ")])
+        )
     out.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(f"{cat}.ops.rescued_keys")
     return spark.table(f"{cat}.ops.rescued_keys").count()
