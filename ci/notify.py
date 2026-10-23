@@ -4,6 +4,8 @@ MAIL_<ROLE> environment variables (GitHub secrets). Addresses and the password a
     python ci/notify.py --flow hotfix --event request --env test ...   # 10j: roles from ci.yml "hotfix", URGENT
     python ci/notify.py --flow hotfix --event backmerge --env prod ...  # 10j: back-merge pull request opened
     python ci/notify.py --flow hotfix --event deployed --env test ...   # 10j: HOTFIX deployed (deploy.yml, ci/flow.py)
+For --event deployed, RESULT (set by deploy.yml to the job status) other than "success" sends to the roles under
+deploy_failed instead (audit B1: a failed deploy goes to the fixers, not to business users).
 """
 import argparse, os, smtplib, ssl, sys
 from email.message import EmailMessage
@@ -23,6 +25,9 @@ if a.flow == "hotfix":
     roles = ci["hotfix"]["backmerge"] if a.event == "backmerge" else ci["hotfix"][a.env][a.event]
 else:
     roles = ci["promotion"][a.env][a.event]
+if a.event == "deployed" and os.environ.get("RESULT", "success") != "success":
+    sect = ci["hotfix"][a.env] if a.flow == "hotfix" else ci["promotion"][a.env]
+    roles = sect.get("deploy_failed", roles)
 to = []
 for r in roles:
     addr = os.environ.get(f"MAIL_{r.upper()}", "")

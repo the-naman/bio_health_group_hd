@@ -70,7 +70,8 @@ For dev: same with target = dev; then each person runs `refresh/02_refresh_in` (
 A Silver rebuild from Bronze (`silver_rebuild`) removes the refreshed rows; run the refresh again after one.
 
 ## Alerts and weekly digest (5.12)
-Kinds of mail, each to the people who act on it (from go-live, 5.13, Management also gets test/prod failures and alerts):
+Kinds of mail, each to the people who act on it (from go-live, 5.13, Management also gets test/prod failures and alerts;
+a failed deploy goes to the fixers and Management only, never to the Business Manager):
 
 | Mail | Sent by | When |
 |---|---|---|
@@ -98,7 +99,7 @@ top of the hour, where GitHub may delay or drop runs. Test and prod each run one
 | 03:00 FQF, 04:00 BHG | `lh_<code>_prod_daily` | prod daily job (BHG after FQF: the group view reads FQF Gold) |
 | 05:00 FQF, 06:00 BHG | `lh_<code>_test_daily` | test daily job |
 | 03:45 to 19:45, every 2 h | `notices.yml` | business notices (figures delayed / up to date again / FQF merged) |
-| 04:15 to 20:15, every 2 h | `alerts.yml` | data alerts for prod; Monday 09:15 weekly digest; 20:45 dev activity |
+| 04:45 to 20:45, every 2 h | `alerts.yml` | data alerts for prod (after the prod jobs); 07:05 test; Monday 09:15 weekly digest; 20:45 dev activity |
 | 1st of the month, 08:47 | `keepalive.yml` | keeps the scheduled workflows enabled |
 
 Dev jobs (`lh_bhg_dev_*_<role>`) have no schedule: each person runs their own. Daily checks: the smoke check

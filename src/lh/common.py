@@ -29,6 +29,6 @@ def log_run(spark, cfg, job, status, rows=0, message=""):
         run_ts TIMESTAMP, company STRING, env STRING, job STRING,
         status STRING, rows BIGINT, message STRING)""")
     spark.createDataFrame(
-        [(datetime.datetime.utcnow(), cfg["code"], cfg["env"], job, status, int(rows), message[:500])],
+        [(datetime.datetime.now(datetime.timezone.utc), cfg["code"], cfg["env"], job, status, int(rows), message[:500])],
         f"run_ts timestamp, company string, env string, job string, status string, rows bigint, message string"
     ).write.mode("append").saveAsTable(t)
