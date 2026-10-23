@@ -94,7 +94,8 @@ def plan(p, env, layer, columns, renames):
     id_columns = ids.get("columns", []) if env in ids.get("environments", []) else []
     if layer == "silver":
         for table, wanted in p["personal"].items():
-            if table.startswith(("dim_", "fact_")): continue          # gold tables are checked in gold
+            if table.startswith(("dim_", "fact_")) or table in p.get("gold_tables", []):
+                continue                                                # gold tables are checked in gold
             lost = [c for c in wanted if c not in columns.get(table, {})]
             if lost:
                 raise ValueError(f"privacy.yml: silver.{table} has no column {lost}")
