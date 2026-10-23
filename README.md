@@ -12,9 +12,10 @@ its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same env
 | `bi/` | BI views and AI/BI dashboards (published per environment) |
 | `jobs/` | the daily job as code (`config/jobs.yml`) |
 | `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix, t33 = data dictionary in the catalog) |
+| `docs/` | operations runbook, disaster recovery, decision records (`adr/`) |
 | `ci/`, `.github/workflows/` | promotion checks, approval notices, deploy after a merge, business notices, alerts and the weekly digest |
 | `config/` | every setting, per environment. No secrets: they live in GitHub secrets and Databricks secret scopes |
-| `setup_once/` | one-time environment setup and access grants (admin) |
+| `setup_once/` | one-time environment setup and access grants (admin); access matrix in `src/lh/access.py`, checked by `02_verify_setup` |
 
 ## One framework, every table on its own (requirement 17)
 Bronze and Silver are metadata-driven: one engine per layer (`src/lh/bronze.py`, `src/lh/silver.py`) and one
@@ -105,7 +106,7 @@ top of the hour, where GitHub may delay or drop runs. Test and prod each run one
 Dev jobs (`lh_bhg_dev_*_<role>`) have no schedule: each person runs their own. Daily checks: the smoke check
 (`checks/t00_job_smoke`) ends every daily run; a deploy is followed by `checks/t28_jobs`; access by `checks/t29_role_access`.
 
-When something goes wrong:
+When something goes wrong (full playbook: `docs/runbook.md`; losing data, secrets or the workspace: `docs/disaster_recovery.md`):
 - A failed task mails the fixers at once; a late or failed prod run also sends one plain "figures delayed" notice.
 - Re-run a failed test/prod job from Jobs -> the run -> Repair run (Manager in test, Management in prod).
 - A brand-new test/prod job fails its first deploy with "only workspace admins can change the owner of a job":

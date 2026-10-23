@@ -16,6 +16,12 @@ Notable changes to this platform, newest first (same file in both repos). Format
 - Payment stream health alert (FQF, `ci/alerts.py`, rules `config/alerts.yml` -> stream_health): one mail when the
   stream stops finishing runs, runs without Kafka events, or leaves out an unusual share of messages; weekly digest
   line with stream runs and events. Failed stream tasks are still mailed by Databricks.
+- Operations runbook (`docs/runbook.md`) and disaster-recovery note (`docs/disaster_recovery.md`: RPO/RTO per asset,
+  scenarios, known gaps, drills).
+- Access matrix in one place (`src/lh/access.py`), used by `01_grant_access` and the refreshed read-only
+  `02_verify_setup` (groups, admins, service principals, grants incl. refresh, volumes, secret scopes, own tokens).
+### Fixed
+- `ci/flow.py` asks GitHub up to 3 times (busy, network, merge not linked yet) before mailing a deploy as a promotion.
 
 ## 2026-10-23 - go-live and real-time stream
 ### Added
