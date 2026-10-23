@@ -17,6 +17,7 @@ SCENARIOS = [
     ("observe", None, True, False),  # new source columns found in Bronze _rescued_data
     ("stream_logic", None, True, True),  # watermark, de-duplication, windows, late and broken events
     ("stream_views", None, True, True),  # stream BI views, dashboard queries, masks on the Gold windows only
+    ("dictionary", None, True, False),  # table, column and view descriptions in the catalog
 ]
 
 

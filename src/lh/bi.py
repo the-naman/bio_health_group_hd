@@ -24,6 +24,8 @@ to whoever reads the view (Unity Catalog checks the reader, not the view). They 
          v_group_customers       people by match method, shared or not, city
 """
 
+from lh import dictionary
+
 VIEWS = {
     "bhg": {
         "v_bhg_revenue_daily": """
@@ -176,11 +178,14 @@ def wanted(cfg):
 
 
 def build(spark, cfg):
-    """Create or replace every view of this catalog. Returns {view: rows}."""
-    cat, out = cfg["catalog"], {}
+    """Create or replace every view of this catalog, with its description from config/dictionary.yml.
+    Returns {view: rows}."""
+    cat, out, words = cfg["catalog"], {}, dictionary.load()
     for name, sql in wanted(cfg).items():
         if name in EMPTY_UNTIL and not spark.catalog.tableExists(f"{cat}.{EMPTY_UNTIL[name][0]}"):
             sql = EMPTY_UNTIL[name][1]
-        spark.sql(f"CREATE OR REPLACE VIEW {cat}.gold.{name} AS {sql.format(cat=cat)}")
+        about = dictionary.view_comment(name, words)
+        note = f" COMMENT '{about}'" if about else ""
+        spark.sql(f"CREATE OR REPLACE VIEW {cat}.gold.{name}{note} AS {sql.format(cat=cat)}")
         out[name] = spark.table(f"{cat}.gold.{name}").count()
     return out

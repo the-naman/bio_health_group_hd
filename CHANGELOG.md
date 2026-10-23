@@ -10,6 +10,9 @@ Notable changes to this platform, newest first (same file in both repos). Format
   (mail routing, dev activity, alerts, new-column watch, stream logic and views); run on every pull request.
 - Shared-code drift guard (`ci/shared.py`, rules in `config/ci.yml` -> shared): every pull request compares the shared
   files with the other repo's branch for the same environment and fails on any difference or undeclared file.
+- Data dictionary (`config/dictionary.yml`, `src/lh/dictionary.py`): every Silver table, Gold table and column and BI
+  view carries a plain-language description in Unity Catalog (Catalog Explorer, Genie, Power BI). Set by the BI step
+  after Gold, only where it changed; checked by `checks/t33_dictionary` and the tests.
 
 ## 2026-10-23 - go-live and real-time stream
 ### Added

@@ -13,3 +13,4 @@ consequences. A decision is changed by a new record that replaces the old one, n
 | 0006 | Real-time stream as scheduled availableNow runs | Accepted |
 | 0007 | Two repos sharing one framework | Accepted |
 | 0008 | Alerts and notices from GitHub Actions, each finding once | Accepted |
+| 0009 | Data dictionary as comments in Unity Catalog, from one YAML file | Accepted |

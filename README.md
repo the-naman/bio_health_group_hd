@@ -11,7 +11,7 @@ its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same env
 | `security/` | column masks and row filters, driven by `config/privacy.yml` |
 | `bi/` | BI views and AI/BI dashboards (published per environment) |
 | `jobs/` | the daily job as code (`config/jobs.yml`) |
-| `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix) |
+| `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix, t33 = data dictionary in the catalog) |
 | `ci/`, `.github/workflows/` | promotion checks, approval notices, deploy after a merge, business notices, alerts and the weekly digest |
 | `config/` | every setting, per environment. No secrets: they live in GitHub secrets and Databricks secret scopes |
 | `setup_once/` | one-time environment setup and access grants (admin) |
@@ -120,4 +120,6 @@ When something goes wrong:
 - `python -m pytest` runs the tests in `tests/` (about 2 minutes; Spark scenarios need Java). CI runs them on every PR.
 - Shared code (`src/lh`, `ci`, `simulator`, `tests`, most workflows) must stay identical in both repos; CI checks it on
   every PR (`ci/shared.py`, list in `config/ci.yml` -> shared). Change both repos' dev branches before promoting.
+- New or changed Gold column or BI view: describe it in `config/dictionary.yml` in the same PR (one line, no quotes);
+  the tests fail otherwise, and `checks/t33_dictionary` checks the catalog after the next run.
 - Why things are built the way they are: `docs/adr/` (decision records). What changed when: `CHANGELOG.md`.
