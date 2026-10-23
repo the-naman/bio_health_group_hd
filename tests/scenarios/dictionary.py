@@ -71,6 +71,19 @@ check(
     missing["missing"] == ["spark_catalog.gold.not_built_yet"],
 )
 
+from lh import gold  # noqa: E402
+
+row = spark.createDataFrame([tuple("x" for _ in d["gold"][g_name]["columns"])], cols.replace("`", ""))
+gold.save(spark, cfg, g_name, row)  # full overwrite, as every daily run does
+got = {c.name: c.description for c in spark.catalog.listColumns(f"spark_catalog.gold.{g_name}")}
+check(
+    "Gold save writes the column descriptions with the data",
+    all(got[c] == t for c, t in d["gold"][g_name]["columns"].items()),
+    got,
+)
+after = dictionary.apply(spark, cfg, small)
+check("after a full Gold rebuild no column description needs setting", after["columns"] == 0, after)
+
 view = next(iter(d["views"]))
 about = dictionary.view_comment(view, d)
 spark.sql(f"CREATE OR REPLACE VIEW gold.{view} COMMENT '{about}' AS SELECT 1 AS x")

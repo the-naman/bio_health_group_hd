@@ -5,7 +5,7 @@ tables) and gold/sql/group/<name>.sql (group tables, BHG repo only), run in the 
 and config/group.yml by lh/gold_sql.py. This module keeps what those files need from Python:
 
   load_gold()                 the Gold settings (config/gold.yml)
-  save()                      full rebuild of one Gold table; column masks and row filters stay attached
+  save()                      full rebuild of one Gold table with its column descriptions; masks and row filters stay
   contact_fingerprint_udf()   keyed hash of phone + date of birth, registered for SQL as contact_fingerprint()
                               (it needs the group match key from the secret scope, so it cannot be plain SQL)
 
@@ -23,7 +23,7 @@ import re
 import yaml
 from pyspark.sql import functions as F
 
-from lh import common
+from lh import common, dictionary
 
 
 def load_gold():
@@ -31,11 +31,22 @@ def load_gold():
         return yaml.safe_load(f)
 
 
+def with_comments(df, name, words=None):
+    """Column descriptions of config/dictionary.yml written with the data: a full overwrite replaces the schema, so
+    comments set afterwards would be lost on every run and set again (one ALTER per column)."""
+    cols = (words or dictionary.load()).get("gold", {}).get(name, {}).get("columns", {})
+    for c in df.columns:
+        if c in cols:
+            df = df.withMetadata(c, {**df.schema[c].metadata, "comment": cols[c]})
+    return df
+
+
 def save(spark, cfg, name, df):
-    """Replace <catalog>.gold.<name> with df and return its row count."""
+    """Replace <catalog>.gold.<name> with df (column descriptions included) and return its row count."""
     target = f"{cfg['catalog']}.gold.{name}"
     (
-        df.withColumn("_gold_ts", F.current_timestamp())
+        with_comments(df, name)
+        .withColumn("_gold_ts", F.current_timestamp())
         .write.mode("overwrite")
         .option("overwriteSchema", "true")
         .saveAsTable(target)

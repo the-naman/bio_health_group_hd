@@ -1,8 +1,9 @@
 """Data dictionary (same file in both repos): table, column and view descriptions in Unity Catalog.
 
 The text lives in config/dictionary.yml (silver: table about; gold: about + every column; views: about). It shows in
-Catalog Explorer, helps Genie and Power BI users, and travels with the data. apply() runs in the BI step of the daily
-job, after Gold is rebuilt (a full Gold overwrite drops column comments), and only changes what differs. BI views get
+Catalog Explorer, helps Genie and Power BI users, and travels with the data. Gold column descriptions are written
+with the data by gold.save; apply() runs in the BI step of the daily job and sets only what still differs (Silver and
+table descriptions, the stream table, anything new), so a normal day changes nothing. BI views get
 their description when they are created (src/lh/bi.py, view_comment). A comment that cannot be set never stops the
 job: it is reported in "failed" and by checks/t33_dictionary.
 

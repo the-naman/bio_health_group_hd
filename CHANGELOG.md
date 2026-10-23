@@ -22,6 +22,7 @@ Notable changes to this platform, newest first (same file in both repos). Format
   `02_verify_setup` (groups, admins, service principals, grants incl. refresh, volumes, secret scopes, own tokens).
 - Performance (`docs/performance.md`, `config/performance.yml`): Bronze loads 4 tables side by side; the BI step
   compacts small-file tables (run logs, payment stream) only when needed.
+- Gold column descriptions are written with the data (`gold.save`), so the BI step no longer sets them again every run.
 ### Fixed
 - `ci/flow.py` asks GitHub up to 3 times (busy, network, merge not linked yet) before mailing a deploy as a promotion.
 - `01_grant_access` prints job-account names, never their application ids.

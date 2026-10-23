@@ -30,13 +30,17 @@ Task minutes in 7 days: bhg_test 99, fqf_test 67, bhg_prod 53, fqf_prod 52, stre
    add work and give nothing at this size.
 3. Append-only tables (stream steps every 2 hours, run logs) collect many tiny files, which slows the dashboard page
    "Payment events" and every alert query a little more each day.
-4. `silver_rebuild` shows "not success" on every run: that is the task being skipped on purpose (it only runs after a
+4. Found in the first dev run after the changes: the data dictionary set every Gold column description again on
+   each run (BHG 113, FQF 82 ALTER statements, about 1.5-2 minutes of the BI step), because the full Gold overwrite
+   replaces the schema and drops column comments.
+5. `silver_rebuild` shows "not success" on every run: that is the task being skipped on purpose (it only runs after a
    failed Silver checkpoint), not a failure.
 
 ## Changes
 | Change | Where | Expected effect |
 |---|---|---|
 | Bronze loads 4 tables side by side | `bronze.load_all`, `config/performance.yml` bronze_parallel_tables | Bronze 7-9 -> about 3 min; daily runs about 25-35% shorter; about 20 task minutes less per day over the four runs |
+| Gold column descriptions written with the data | `gold.save` (`with_comments`), `src/lh/dictionary.py` | BI step about 2.5 -> about 1 min; a normal day sets 0 descriptions |
 | Daily compaction of small-file tables | `src/lh/maintain.py`, BI step, `config/performance.yml` compact | OPTIMIZE only when a table has 50+ files averaging under 8 MB; a normal day costs one DESCRIBE per table |
 Each table still has its own checkpoint, files and audit row; a failing table no longer stops the others, the task
 still fails and retries. Setting bronze_parallel_tables to 1 restores the old behaviour.
@@ -49,8 +53,16 @@ still fails and retries. Setting bronze_parallel_tables to 1 restores the old be
 | Fewer, larger tasks | separate tasks give separate retries and alerts | never: reliability first |
 | Photon / bigger compute | serverless chooses compute on Free Edition | paid workspace with job clusters |
 
-## After (fill in after the dev and test runs)
-| Job | Bronze before | Bronze after | Run before | Run after |
+## After
+Dev, 24 Oct (no new source files that day, so Bronze had nothing to load: 3 s FQF, 0 s BHG; the Bronze gain shows on
+days with files, measured in test and prod after promotion):
+| Check | FQF dev | BHG dev |
+|---|---|---|
+| Run | 8 min 17 s, all green | 8 min 3 s, all green |
+| Compaction | silver.payment_events 88 -> 1 file | nothing needed |
+| BI step | 2 min 44 s (dictionary 82 columns set again: fixed after this run) | 2 min 38 s (113 columns: fixed) |
+
+| Job (test/prod, after promotion) | Bronze before | Bronze after | Run before | Run after |
 |---|---|---|---|---|
-| dev FQF | | | | |
-| dev BHG | | | | |
+| lh_fqf_prod_daily | 9.3 | | about 17 | |
+| lh_bhg_prod_daily | 7.1 | | about 16 | |
