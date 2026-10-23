@@ -5,6 +5,7 @@ Fails (exit 1) when any check fails. Prints file names and line numbers only, ne
 import ast
 import glob
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -125,6 +126,17 @@ else:
     bad = [x for x in lint.stdout.splitlines() if x and not x.startswith(("Found", "All checks", "["))]
     bad += [x for x in fmt.stdout.splitlines() if x.startswith("Would reformat")]
 check("python lint and format (ruff)", bad)
+
+# 8. Shared code identical in both repos (ci/shared.py, rules in config/ci.yml -> shared). Needs the network to read the
+#    other repo, so it runs in CI; run python ci/shared.py by hand to check it from a terminal.
+if os.environ.get("GITHUB_ACTIONS") == "true":
+    res = subprocess.run([sys.executable, "ci/shared.py"], capture_output=True, text=True)
+    bad = [x.strip() for x in res.stdout.splitlines() if x.startswith("     ")] or (
+        [] if res.returncode == 0 else [res.stderr[-300:]]
+    )
+    check("shared files identical in both repos", bad)
+else:
+    print("INFO shared files: checked in CI (or run python ci/shared.py)")
 
 print(f"\n{len(passed)}/{len(passed) + len(problems)} PASS")
 sys.exit(1 if problems else 0)

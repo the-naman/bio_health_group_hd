@@ -118,5 +118,6 @@ When something goes wrong:
 - `python ci/checks.py` runs the same 8 checks as CI: compile, no notebook outputs, YAML, job config, dashboards,
   no email or token, and ruff lint and format (rules in `pyproject.toml`; run `ruff format .` before committing).
 - `python -m pytest` runs the tests in `tests/` (about 2 minutes; Spark scenarios need Java). CI runs them on every PR.
-- Shared code (`src/lh`, `ci`, `simulator`, `tests`, most workflows) must stay identical in both repos.
+- Shared code (`src/lh`, `ci`, `simulator`, `tests`, most workflows) must stay identical in both repos; CI checks it on
+  every PR (`ci/shared.py`, list in `config/ci.yml` -> shared). Change both repos' dev branches before promoting.
 - Why things are built the way they are: `docs/adr/` (decision records). What changed when: `CHANGELOG.md`.
