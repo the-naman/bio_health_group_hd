@@ -77,8 +77,8 @@ a failed deploy goes to the fixers and Management only, never to the Business Ma
 |---|---|---|
 | a task failed | Databricks (`config/jobs.yml` notify) | at once, to the fixers |
 | figures delayed / up to date again, FQF merged | `ci/notices.py` (`notices.yml`) | business notice, once each |
-| data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed |
-| weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, mails sent |
+| data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed; FQF: failed-payment velocity, payment stream health (no finished run, no Kafka events, too many messages left out) |
+| weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, payment stream (FQF), mails sent |
 | dev activity | `ci/alerts.py --env dev --dev-activity` (daily 20:45 IST) | every dev job run of the day, to Developer and Team Lead (requirement 10) |
 | your own dev run | Databricks (`config/jobs.yml` notify.dev) | each person's dev job mails only its owner, on failure and on success |
 

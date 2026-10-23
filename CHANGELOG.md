@@ -13,6 +13,9 @@ Notable changes to this platform, newest first (same file in both repos). Format
 - Data dictionary (`config/dictionary.yml`, `src/lh/dictionary.py`): every Silver table, Gold table and column and BI
   view carries a plain-language description in Unity Catalog (Catalog Explorer, Genie, Power BI). Set by the BI step
   after Gold, only where it changed; checked by `checks/t33_dictionary` and the tests.
+- Payment stream health alert (FQF, `ci/alerts.py`, rules `config/alerts.yml` -> stream_health): one mail when the
+  stream stops finishing runs, runs without Kafka events, or leaves out an unusual share of messages; weekly digest
+  line with stream runs and events. Failed stream tasks are still mailed by Databricks.
 
 ## 2026-10-23 - go-live and real-time stream
 ### Added

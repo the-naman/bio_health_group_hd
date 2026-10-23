@@ -10,10 +10,12 @@ Alerts (every two hours; all new findings in one mail; each finding sent once vi
   backlog      BHG: FQF days waiting too long to be merged into the group figures
   over_limit   BHG: the number of people owing the group more than the policy limit changed
   velocity     FQF (5.14): a customer had too many failed payments in one 10-minute window (gold.payment_failure_windows)
+  stream       FQF (stream health): the payment stream stopped finishing runs, receives no events from Kafka, or
+               drops an unusual share of messages (ops.audit_runs rows stream.<layer>; rules config/alerts.yml)
 Not repeated: a failed task (Databricks mails the fixers) and "figures delayed" (ci/notices.py).
 
 Digest (Monday 09:15 IST): runs and failures of the week, freshness, quarantine, new columns, merge and group
-numbers (BHG), alerts and notices sent. Once per ISO week.
+numbers (BHG), payment stream runs and events (FQF), alerts and notices sent. Once per ISO week.
 
 Dev activity (daily 20:45 IST, requirement 10: Developer <-> Team Lead): every run of the per-person dev jobs
 lh_<code>_dev_daily_<role> in the last 24 hours, with result, duration and failed tasks; no runs = no mail. Read from
@@ -201,6 +203,8 @@ sql("""CREATE TABLE IF NOT EXISTS ops.notice_log (notice STRING, ref STRING, sen
        COMMENT '10e/5.12: notices and alerts already sent (ci/notices.py, ci/alerts.py); never resent'""")
 days = int(acfg.get("lookback_days", 3))
 has_audit = exists("ops", "audit_runs")
+scfg = yaml.safe_load(Path("config/stream.yml").read_text())
+has_stream = code in scfg.get("companies", []) and has_audit
 
 
 # ---------------------------------------------------------------- weekly digest
@@ -265,6 +269,13 @@ if a.digest:
                     for x in ("people", "people_shared", "people_over_limit", "reviews_open", "intercompany_breaks")
                 )
             )
+    if has_stream:
+        r = sql("""SELECT sum(CASE WHEN job = 'stream.gold' THEN 1 ELSE 0 END),
+                         sum(CASE WHEN job = 'stream.bronze' THEN rows ELSE 0 END),
+                         sum(CASE WHEN job = 'stream.silver' THEN rows ELSE 0 END)
+                  FROM ops.audit_runs WHERE job LIKE 'stream.%' AND status = 'success'
+                  AND run_ts >= current_timestamp() - INTERVAL 7 DAYS""")[0]
+        out.append(f"Payment stream: {num(r[0])} runs, {num(r[1])} Kafka messages, {num(r[2])} payment events kept.")
     s = sql(
         "SELECT notice, count(*) FROM ops.notice_log WHERE sent_at >= current_timestamp() - INTERVAL 7 DAYS "
         "AND notice <> 'digest' GROUP BY notice ORDER BY notice"
@@ -376,6 +387,57 @@ if exists("gold", "payment_failure_windows"):
             )
         )
 
+sh = acfg.get("stream_health", {})
+if has_stream and a.env in sh.get("max_hours_since_run", {}):
+    # Silent stream problems only. A failed stream task is mailed to the fixers by Databricks (config/jobs.yml notify).
+    last = sql("""SELECT CAST(max(run_ts) AS STRING),
+                           (unix_timestamp(current_timestamp()) - unix_timestamp(max(run_ts))) / 3600
+                    FROM ops.audit_runs WHERE job = 'stream.gold' AND status = 'success'""")
+    first_h, end_h = sh["active_hours_ist"][a.env]
+    if last and last[0][0] and first_h <= now.hour < end_h:
+        hours, limit = float(last[0][1]), float(sh["max_hours_since_run"][a.env])
+        print(f"stream: last finished run {hours:.1f} h ago (limit {limit:g} h)")
+        if hours > limit:
+            found.append(
+                (
+                    "stream",
+                    f"stale|{last[0][0]}",
+                    f"The payment stream has not finished a run for {hours:.1f} hours (last good run "
+                    f"{ist(last[0][0])}). Check lh_{code}_{a.env}_stream: paused schedule, failing task or Kafka login.",
+                )
+            )
+    if scfg.get("producer", {}).get("live", {}).get(a.env):
+        hours = int(sh["empty_hours"][a.env])
+        runs, rows = sql(f"""SELECT count(*), coalesce(sum(rows), 0) FROM ops.audit_runs
+                              WHERE job = 'stream.bronze' AND status = 'success'
+                              AND run_ts >= current_timestamp() - INTERVAL {hours} HOURS""")[0]
+        if num(runs) >= 2 and num(rows) == 0:
+            found.append(
+                (
+                    "stream",
+                    f"empty|{today}",
+                    f"The payment stream ran {num(runs)} times in the last {hours} hours but received no events from "
+                    "Kafka. Check the producer (GitHub Actions workflow stream) and the topic on the Kafka service.",
+                )
+            )
+    kafka, kept = sql("""SELECT coalesce(sum(CASE WHEN job = 'stream.bronze' THEN rows END), 0),
+                                 coalesce(sum(CASE WHEN job = 'stream.silver' THEN rows END), 0)
+                          FROM ops.audit_runs WHERE job IN ('stream.bronze', 'stream.silver') AND status = 'success'
+                          AND run_ts >= current_timestamp() - INTERVAL 24 HOURS""")[0]
+    kafka, kept = num(kafka), num(kept)
+    if kafka >= int(sh["min_events"]) and kept < kafka:
+        pct = 100 * (kafka - kept) / kafka
+        print(f"stream: {kafka} Kafka messages, {kept} kept in 24 h ({pct:.1f}% left out)")
+        if pct > float(sh["max_dropped_pct"]):
+            found.append(
+                (
+                    "stream",
+                    f"dropped|{today}",
+                    f"The payment stream left out {pct:.1f}% of {kafka} Kafka messages in 24 hours (broken, duplicate "
+                    f"or late; normal is below {sh['max_dropped_pct']}%). Check the producer and silver.payment_events.",
+                )
+            )
+
 if not a.sample:
     done = {(x, y) for x, y in sql("SELECT notice, ref FROM ops.notice_log WHERE notice LIKE 'alert_%'")}
     found = [f for f in found if (f"alert_{f[0]}", f[1]) not in done]
@@ -390,6 +452,7 @@ titles = {
     "backlog": "Group merge waiting",
     "over_limit": "Over-limit customers",
     "velocity": "Failed-payment velocity",
+    "stream": "Payment stream health",
 }
 body = []
 for kind in titles:

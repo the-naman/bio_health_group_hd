@@ -276,4 +276,40 @@ n = len(SENT)
 o = run("--env", "test")
 o2 = run("--env", "test")
 check("velocity alert mailed once", len(SENT) == n + 1 and "nothing new" in o2, o2)
+if code in yaml.safe_load(open("config/stream.yml")).get("companies", []):  # stream health (FQF)
+    spark.createDataFrame(
+        [
+            (NOW - dt.timedelta(hours=15), code, "test", "stream.gold", "success", 3, "x"),
+            (NOW - dt.timedelta(hours=20), code, "test", "stream.bronze", "success", 300, "x"),
+            (NOW - dt.timedelta(hours=20), code, "test", "stream.silver", "success", 240, "x"),
+            (NOW - dt.timedelta(hours=9), code, "test", "stream.bronze", "success", 0, "x"),
+            (NOW - dt.timedelta(hours=3), code, "test", "stream.bronze", "success", 0, "x"),
+        ],
+        "run_ts timestamp,company string,env string,job string,status string,rows bigint,message string",
+    ).write.mode("append").saveAsTable("ops.audit_runs")
+    o = run("--env", "test", "--dry-run")
+    check("stream: no finished run for 15 h (limit 13) is listed", "has not finished a run for 15." in o, o)
+    check("stream: 2 runs without Kafka events are listed", "ran 2 times in the last 13 hours" in o, o)
+    check("stream: 20% left out (limit 10%) is listed", "left out 20.0% of 300 Kafka messages" in o, o)
+    n = len(SENT)
+    run("--env", "test")
+    o2 = run("--env", "test")
+    check("stream health mailed once, three findings", len(SENT) == n + 1 and "nothing new" in o2, o2)
+    check("stream health subject", "payment stream health" in SENT[-1]["Subject"], SENT[-1]["Subject"])
+    spark.createDataFrame(
+        [
+            (NOW, code, "test", "stream.bronze", "success", 300, "x"),
+            (NOW, code, "test", "stream.silver", "success", 355, "x"),
+            (NOW, code, "test", "stream.gold", "success", 2, "x"),
+        ],
+        "run_ts timestamp,company string,env string,job string,status string,rows bigint,message string",
+    ).write.mode("append").saveAsTable("ops.audit_runs")
+    o = run("--env", "test", "--sample")
+    check(
+        "healthy stream: no stream finding",
+        "not finished a run" not in o and "no events" not in o and "The payment stream left out" not in o,
+        o,
+    )
+    o = run("--env", "test", "--digest", "--dry-run")
+    check("digest has the stream line", "Payment stream: 2 runs, 600 Kafka messages, 595 payment events kept." in o, o)
 print(f"\n{code} alerts tests: {sum(ok)} of {len(ok)} ->", "PASS" if all(ok) else "FAIL")
