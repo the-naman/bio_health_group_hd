@@ -34,11 +34,17 @@ def fingerprint(value, key):
     return hmac.new(key.encode(), digits.encode(), hashlib.sha256).hexdigest()
 
 
-def log_run(spark, cfg, job, status, rows=0, message=""):
+def audit_table(spark, cfg):
+    """<catalog>.ops.audit_runs, created if missing. Returns its name."""
     t = f"{cfg['catalog']}.ops.audit_runs"
     spark.sql(f"""CREATE TABLE IF NOT EXISTS {t} (
         run_ts TIMESTAMP, company STRING, env STRING, job STRING,
         status STRING, rows BIGINT, message STRING)""")
+    return t
+
+
+def log_run(spark, cfg, job, status, rows=0, message=""):
+    t = audit_table(spark, cfg)
     spark.createDataFrame(
         [(datetime.datetime.now(datetime.UTC), cfg["code"], cfg["env"], job, status, int(rows), message[:500])],
         "run_ts timestamp, company string, env string, job string, status string, rows bigint, message string",

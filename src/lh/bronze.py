@@ -6,7 +6,8 @@ All source columns stay text. Added columns: _source_file, _business_date, _inge
 _rescued_data (anything that does not fit, e.g. a new column) and id_fingerprint where configured.
 Auto Loader keeps one checkpoint per table, so a file is never loaded twice.
 Files are listed and read by one Spark job and moved in parallel, never one by one through the
-volume folder path (that is very slow).
+volume folder path (that is very slow). Tables are loaded side by side (config/performance.yml
+bronze_parallel_tables): each has its own checkpoint, files and audit row, so they never touch each other.
 """
 
 import json
@@ -173,3 +174,21 @@ def load_table(spark, cfg, table, spec, key, landing):
     common.log_run(spark, cfg, job, "success", rows, f"{len(good)} files")
     _move_all(good, base, "processed")  # only after the load and the audit row
     return rows, len(good), len(bad)
+
+
+def load_all(spark, cfg, tables, key, landing, workers=None, load=None):
+    """Load every table of {table: spec}, `workers` at a time (default config/performance.yml). Returns
+    {table: (rows, files loaded, files rejected)} in the order of `tables`. If a table fails, the others still
+    finish (each load is idempotent) and the first error is raised at the end, so the task fails and retries."""
+    if workers is None:
+        with open(os.path.join(common.repo_root(), "config", "performance.yml")) as f:
+            workers = int(yaml.safe_load(f).get("bronze_parallel_tables", 1))
+    load = load or load_table
+    common.audit_table(spark, cfg)  # create the audit table once, before tables write to it side by side
+    with ThreadPoolExecutor(max(1, workers)) as pool:
+        futures = {t: pool.submit(load, spark, cfg, t, spec, key, landing) for t, spec in tables.items()}
+    errors = {t: f.exception() for t, f in futures.items() if f.exception()}
+    if errors:
+        first = next(iter(errors))
+        raise RuntimeError(f"Bronze failed for {sorted(errors)}") from errors[first]
+    return {t: f.result() for t, f in futures.items()}
