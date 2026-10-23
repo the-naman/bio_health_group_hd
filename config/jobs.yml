@@ -6,8 +6,8 @@ folder: {dev: "{repo}", test: "{repo}_test", prod: "{repo}_prod"}   # Git folder
 run_as: {dev: deployer, test: "sp_{code}_test", prod: "sp_{code}_prod"}
 timezone: Asia/Kolkata
 schedule:                                             # test/prod only (dev runs on demand); BHG 30 min after FQF
-  prod: {fqf: "0 0 2 * * ?", bhg: "0 30 2 * * ?"}       # 02:00 and 02:30 IST (simulator writes at 00:30)
-  test: {fqf: "0 30 3 * * ?", bhg: "0 0 4 * * ?"}       # 03:30 and 04:00 IST: staggered, never 4 runs at once
+  prod: {fqf: "0 0 3 * * ?", bhg: "0 0 4 * * ?"}        # 03:00 and 04:00 IST (simulator 00:01, safety run 01:01)
+  test: {fqf: "0 0 5 * * ?", bhg: "0 0 6 * * ?"}        # 05:00 and 06:00 IST: after prod, one run at a time
 paused: false                                         # live since go-live (5.13, 23 Oct 2026); true = pause all
 job_timeout_minutes: 150
 tasks:
@@ -51,5 +51,5 @@ business_notice:
     prod: [developer, teamlead, manager, management, bizmanager]
     test: [developer, teamlead, manager, management]   # 5.13: Management also sees test notices
   freshness:
-    max_hours_since_success: 26             # daily run at 02:00/02:30 IST + 2 h grace
+    max_hours_since_success: 26             # daily run at 03:00/04:00 IST + 2 h grace
     max_running_hours: 3                    # a normal run takes about 25 minutes

@@ -13,6 +13,8 @@ build() turns the config into Jobs API settings for one company and environment:
     adds other roles (empty since go-live: requirement 10 is the daily dev-activity digest, ci/alerts.py);
     the addresses come from the secret scope lh_<env> at deploy time
 deploy() creates or updates the job by name and sets its permissions exactly. plan mode changes nothing.
+Two kinds of job (KINDS), same engine: "daily" (config/jobs.yml) and "stream" (5.14: config/jobs.yml with the keys
+under job: in config/stream.yml, e.g. lh_fqf_<env>_stream; a company without stream tasks gets no stream job).
 Folder paths, job-account IDs and mail addresses are looked up at deploy time, so no person or ID is stored in the repo."""
 import os
 import yaml
@@ -21,9 +23,20 @@ RUN_IF = {"ALL_SUCCESS", "AT_LEAST_ONE_SUCCESS", "NONE_FAILED", "ALL_DONE", "AT_
 ROLES = {"developer", "teamlead", "manager", "bizmanager", "management"}
 
 
-def load_jobs(root):
+KINDS = ("daily", "stream")
+
+
+def load_jobs(root, kind="daily"):
+    """config/jobs.yml; for kind "stream" with the job: keys of config/stream.yml replacing their jobs.yml values."""
     with open(os.path.join(root, "config", "jobs.yml")) as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    if kind == "stream":
+        with open(os.path.join(root, "config", "stream.yml")) as f:
+            cfg.update(yaml.safe_load(f)["job"])
+    elif kind != "daily":
+        raise ValueError(f"unknown job kind {kind}")
+    cfg["kind"] = kind
+    return cfg
 
 
 def tasks_for(cfg, code):
