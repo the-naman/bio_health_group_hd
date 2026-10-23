@@ -117,5 +117,6 @@ When something goes wrong:
 - Branch `<code>_dev`, run your own dev job, then open a pull request; the PR template lists what to check.
 - `python ci/checks.py` runs the same 8 checks as CI: compile, no notebook outputs, YAML, job config, dashboards,
   no email or token, and ruff lint and format (rules in `pyproject.toml`; run `ruff format .` before committing).
-- Shared code (`src/lh`, `ci`, `simulator`, most workflows) must stay identical in both repos.
+- `python -m pytest` runs the tests in `tests/` (about 2 minutes; Spark scenarios need Java). CI runs them on every PR.
+- Shared code (`src/lh`, `ci`, `simulator`, `tests`, most workflows) must stay identical in both repos.
 - Why things are built the way they are: `docs/adr/` (decision records). What changed when: `CHANGELOG.md`.

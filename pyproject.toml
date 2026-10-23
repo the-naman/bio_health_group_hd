@@ -19,3 +19,12 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "preserve"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S106", "S108"]                     # fake passwords and temp folders in tests only
+"tests/scenarios/*" = ["E402", "SIM115", "E741"]   # scenario scripts set up Spark and fakes before importing the code
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]                       # tests/scenarios/*.py run as their own processes, not collected
+addopts = "-q"

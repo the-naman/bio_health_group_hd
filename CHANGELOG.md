@@ -6,6 +6,8 @@ Notable changes to this platform, newest first (same file in both repos). Format
 ### Added
 - Repo standards: ruff lint and format (`pyproject.toml`) enforced by `ci/checks.py`, PR template, CODEOWNERS,
   `.editorconfig`, decision records in `docs/adr/`, this changelog.
+- Tests in the repo (`tests/`, pytest): config rules, simulator determinism and end-to-end scenarios on local Spark
+  (mail routing, dev activity, alerts, new-column watch, stream logic and views); run on every pull request.
 
 ## 2026-10-23 - go-live and real-time stream
 ### Added
