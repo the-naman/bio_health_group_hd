@@ -9,9 +9,10 @@ on:
         default: dev
         type: choice
         options: [dev, test, prod]
-  # Nightly run for test and prod, live since go-live (5.13, 23 Oct 2026). Jobs read the files at 02:00 (prod), 03:30 (test).
-  schedule:
-    - cron: "0 19 * * *"   # 00:30 IST
+  # Nightly run for test and prod, live since go-live (5.13, 23 Oct 2026). Jobs read the files at 03:00 (prod), 05:00 (test).
+  schedule:                 # GitHub may delay or drop scheduled runs at the top of the hour; times below are UTC.
+    - cron: "31 18 * * *"   # 00:01 IST
+    - cron: "31 19 * * *"   # 01:01 IST: safety run, writes nothing if the first one already wrote the day (catch-up)
 
 permissions:
   contents: read
