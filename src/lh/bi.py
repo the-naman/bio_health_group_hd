@@ -8,6 +8,9 @@ to whoever reads the view (Unity Catalog checks the reader, not the view). They 
   BHG    v_bhg_revenue_daily     day x hospital x event type x payer x age band
   FQF    v_fqf_portfolio_daily   day x product x branch x event type
          v_fqf_loan_book         loans today by status, overdue bucket, product, branch
+         v_fqf_payments_live     5.14 stream: payment events per IST day, hour, method, status, reason (no customer)
+         v_fqf_payment_alerts    5.14 stream: closed 10-minute windows with 3+ failed payments (customer_ref masked
+                                 as a token in test/prod by config/privacy.yml)
   health v_health_runs           last run of each job, runs and failures in the last 7 days
          v_health_freshness      how far the company fact reaches and how many days it is behind
          v_health_dq             latest data-quality result per table and rule
@@ -63,6 +66,19 @@ VIEWS = {
             LEFT JOIN {cat}.gold.dim_branch b USING (branch_key)
             WHERE l.loan_key <> -1
             GROUP BY ALL""",
+        "v_fqf_payments_live": """
+            SELECT to_date(from_utc_timestamp(event_ts, 'Asia/Kolkata')) AS day,
+                   hour(from_utc_timestamp(event_ts, 'Asia/Kolkata')) AS hour_ist,
+                   method, status, coalesce(reason, 'none') AS reason,
+                   count(*) AS events, sum(amount) AS amount
+            FROM {cat}.silver.payment_events
+            GROUP BY ALL""",
+        "v_fqf_payment_alerts": """
+            SELECT from_utc_timestamp(window_start, 'Asia/Kolkata') AS window_start_ist,
+                   from_utc_timestamp(window_end, 'Asia/Kolkata') AS window_end_ist,
+                   customer_ref, failed_payments, failed_amount
+            FROM {cat}.gold.payment_failure_windows
+            WHERE is_alert""",
     },
     "group": {
         "v_group_daily": """
@@ -88,6 +104,19 @@ VIEWS = {
     },
 }
 
+
+# A view whose source table may not exist yet (the stream job creates it on its first run) is built empty, with the
+# same columns, so dashboards, t00 and t26 keep working in a new environment.
+EMPTY_UNTIL = {
+    "v_fqf_payments_live": ("silver.payment_events", """
+        SELECT CAST(NULL AS DATE) AS day, CAST(NULL AS INT) AS hour_ist, CAST(NULL AS STRING) AS method,
+               CAST(NULL AS STRING) AS status, CAST(NULL AS STRING) AS reason, CAST(0 AS BIGINT) AS events,
+               CAST(NULL AS DECIMAL(28,2)) AS amount WHERE FALSE"""),
+    "v_fqf_payment_alerts": ("gold.payment_failure_windows", """
+        SELECT CAST(NULL AS TIMESTAMP) AS window_start_ist, CAST(NULL AS TIMESTAMP) AS window_end_ist,
+               CAST(NULL AS STRING) AS customer_ref, CAST(NULL AS INT) AS failed_payments,
+               CAST(NULL AS DECIMAL(28,2)) AS failed_amount WHERE FALSE"""),
+}
 
 FACTS = {"bhg": ("fact_bhg_event", ""), "fqf": ("fact_fqf_event", "AND event_type <> 'emi_due'")}
 
@@ -143,6 +172,8 @@ def build(spark, cfg):
     """Create or replace every view of this catalog. Returns {view: rows}."""
     cat, out = cfg["catalog"], {}
     for name, sql in wanted(cfg).items():
+        if name in EMPTY_UNTIL and not spark.catalog.tableExists(f"{cat}.{EMPTY_UNTIL[name][0]}"):
+            sql = EMPTY_UNTIL[name][1]
         spark.sql(f"CREATE OR REPLACE VIEW {cat}.gold.{name} AS {sql.format(cat=cat)}")
         out[name] = spark.table(f"{cat}.gold.{name}").count()
     return out
