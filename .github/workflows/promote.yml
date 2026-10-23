@@ -3,7 +3,7 @@ name: promote
 # 5.10: a pull request into <code>_test or <code>_prod (same file in both repos).
 #   route    - ci/route.py: test only accepts PRs from <code>_dev, prod only from <code>_test;
 #              10j hotfix: <code>_hotfix_<name> (from prod) -> test (URGENT, Management) -> prod (Business-user Manager)
-#   checks   - ci/checks.py (compile, no outputs, yaml, job graph, dashboards, no email or token, ruff)
+#   checks   - ci/checks.py (compile, no outputs, yaml, job graph, dashboards, no email or token, ruff) + pytest tests/
 #   approval - waits for the environment's reviewer (Manager for test, Business-user Manager for prod).
 #              Reject = this check fails = the PR cannot merge; fix on the lower branch, push, a new approval starts.
 #   notices  - Gmail to the roles in config/ci.yml (addresses are secrets, never printed)
@@ -48,14 +48,15 @@ jobs:
   checks:
     needs: route
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - run: pip install --quiet pyyaml ruff==0.15.11   # ruff: lint and format check (pyproject.toml)
+      - run: pip install --quiet pyyaml ruff==0.15.11 pytest==8.3.3 pyspark==3.5.3   # Spark tests use the runner's Java
       - run: python ci/checks.py
+      - run: python -m pytest -p no:cacheprovider   # tests/: config rules, simulator, scenarios on local Spark
 
   request:
     needs: [route, checks]
