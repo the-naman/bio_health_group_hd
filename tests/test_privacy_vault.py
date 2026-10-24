@@ -27,16 +27,12 @@ class FakeSpark:
         self.routines, self.tables = list(routines), tables or {}
         spark = self
 
-        class Catalog:
-            def tableExists(self, name):  # noqa: N802 (Spark API name)
-                return spark.key_exists
-
         class Writer:
             def __init__(self, rows):
                 self.rows = rows
 
             def mode(self, m):
-                assert m == "errorifexists"
+                assert m == "append"
                 return self
 
             def option(self, *a):
@@ -50,13 +46,14 @@ class FakeSpark:
             def __init__(self, rows):
                 self.write = Writer(rows)
 
-        self.catalog = Catalog()
         self.createDataFrame = lambda rows, schema: DF(rows)  # noqa: N815
 
     def sql(self, q):
         self.sqls.append(q)
         if "session_user()" in q and q.strip().startswith("SELECT"):
             return Rows([(SP,)])
+        if q.startswith("SELECT count(*) FROM lh_vault."):
+            return Rows([(1 if self.key_exists else 0,)])
         if "information_schema.routines" in q:
             return Rows([(r,) for r in self.routines])
         if "information_schema.column_masks" in q:
@@ -130,6 +127,7 @@ def test_key_is_made_once_and_never_replaced(small):
     privacy.create_function(spark, CFG, "test", "token")
     assert spark.saved == []
     assert privacy.ensure_key(spark, CFG, "test") is False
+    assert any(q.startswith("CREATE TABLE IF NOT EXISTS lh_vault.bhg_test.mask_key") for q in spark.sqls)
 
 
 def test_dev_token_is_unkeyed(small):
