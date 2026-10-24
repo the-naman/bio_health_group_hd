@@ -111,3 +111,89 @@ def test_a_table_that_refuses_optimize_is_reported_not_raised():
 
     spark.sql = sql
     assert maintain.compact(spark, CFG, s) == ([], [("gold.masked", "PermissionError")])
+
+
+ROOT = "/Volumes/c_dev/bronze/landing/"
+TREE = {  # folder -> [(path, is folder)]; Databricks returns dbfs: paths and folders with a trailing /
+    ROOT: [(f"dbfs:{ROOT}_sim/", True), (f"dbfs:{ROOT}files/", True), (f"dbfs:{ROOT}legacy/", True)],
+    f"dbfs:{ROOT}_sim/": [(f"dbfs:{ROOT}_sim/state/", True)],
+    f"dbfs:{ROOT}files/": [(f"dbfs:{ROOT}files/patients/", True), (f"dbfs:{ROOT}files/doctors/", True)],
+    f"dbfs:{ROOT}legacy/": [(f"dbfs:{ROOT}legacy/loans/", True)],
+    f"dbfs:{ROOT}files/patients/": [(f"dbfs:{ROOT}files/patients/2026/", True)],
+    f"dbfs:{ROOT}files/patients/2026/": [(f"dbfs:{ROOT}files/patients/2026/10/", True)],
+    f"dbfs:{ROOT}files/patients/2026/10/": [(f"dbfs:{ROOT}files/patients/2026/10/patients_20261024_01.csv", False)],
+    f"dbfs:{ROOT}files/doctors/": [],
+    f"dbfs:{ROOT}legacy/loans/": [(f"dbfs:{ROOT}legacy/loans/2026/", True)],
+    f"dbfs:{ROOT}legacy/loans/2026/": [],
+}
+
+
+class Lister:
+    def __init__(self, tree):
+        self.tree, self.seen, self.lock, self.now, self.peak = tree, [], threading.Lock(), 0, 0
+
+    def __call__(self, path):
+        with self.lock:
+            self.seen.append(path)
+            self.now += 1
+            self.peak = max(self.peak, self.now)
+        time.sleep(0.02)
+        with self.lock:
+            self.now -= 1
+        if path not in self.tree:
+            raise FileNotFoundError(path)
+        return self.tree[path]
+
+
+class ReadSpark:
+    """Answers spark.read.format("binaryFile").load(paths) with fixed bytes and records the paths read."""
+
+    def __init__(self):
+        self.loaded = []
+        spark = self
+
+        class Reader:
+            def format(self, f):
+                assert f == "binaryFile"
+                return self
+
+            def load(self, paths):
+                spark.loaded.append(list(paths))
+                rows = [{"path": "dbfs:" + p, "content": b"x"} for p in paths]
+                return types.SimpleNamespace(select=lambda *c: types.SimpleNamespace(collect=lambda: rows))
+
+        self.read = Reader()
+
+
+def test_landing_listing_finds_files_skips_the_simulator_folder_and_reads_only_found_files():
+    ls, spark = Lister(TREE), ReadSpark()
+    out = bronze.list_landing(spark, CFG, ls=ls, workers=8)
+    path = f"{ROOT}files/patients/2026/10/patients_20261024_01.csv"
+    assert out == {("files", "patients"): [(path, b"x")]}
+    assert spark.loaded == [[path]]  # one Spark read, only for the file that exists
+    assert not any("/_sim/" in p for p in ls.seen)  # the simulator's state markers are never walked
+
+
+def test_landing_listing_with_no_files_reads_nothing():
+    tree = {k: [e for e in v if not e[0].endswith(".csv")] for k, v in TREE.items()}
+    spark = ReadSpark()
+    assert bronze.list_landing(spark, CFG, ls=Lister(tree), workers=8) == {}
+    assert spark.loaded == []  # a 0-file day starts no Spark job at all
+
+
+def test_landing_folders_of_one_level_are_listed_at_the_same_time():
+    ls = Lister(TREE)
+    bronze.list_landing(ReadSpark(), CFG, ls=ls, workers=8)
+    assert ls.peak >= 2
+
+
+def test_missing_landing_folder_means_no_files():
+    assert bronze.list_landing(ReadSpark(), CFG, ls=Lister({}), workers=4) == {}
+
+
+def test_listing_threads_come_from_config():
+    import yaml
+
+    from tests.conftest import ROOT as REPO
+
+    assert yaml.safe_load((REPO / "config" / "performance.yml").read_text())["landing_list_threads"] >= 8

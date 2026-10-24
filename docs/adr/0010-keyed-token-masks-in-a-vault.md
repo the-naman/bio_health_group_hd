@@ -18,6 +18,7 @@
 - Consequences: tokens in test/prod change once, on the first run after the release (anything that stored a token
   value, such as an alert already mailed, may appear once more). The key is never rotated on purpose: a new key
   changes every token. If the vault is lost, the next run creates a new key and the tokens change; no data is lost.
-  Management owns the vault catalog (it created it) and could read the key, but Management already sees real values.
+  Management owns the vault catalog (it created it) but cannot read the key either: the key table belongs to the job
+  account, and catalog ownership does not give SELECT on it (proven 24 Oct by 02_verify_setup).
   The hash is SHA-256 over key + value (Databricks SQL has no HMAC function); with a secret 256-bit key and 8 shown
   characters this is enough to stop guessing.
