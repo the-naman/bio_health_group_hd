@@ -33,6 +33,8 @@ Notable changes to this platform, newest first (same file in both repos). Format
   only by the job account; readers still get tokens through the masks but can no longer rebuild ids by guessing.
   One-time setup `setup_once/notebook/04_vault_setup`; checked by `t15_masks_applied`.
 - `SECURITY.md`: how to report a security problem (private vulnerability reporting).
+- The token vault is part of the regular access checks: `02_verify_setup` (grants exactly as planned, one schema per
+  job account, key present) and `t29_role_access` (no working role reads the key or calls the token function).
 ### Fixed
 - `ci/flow.py` asks GitHub up to 3 times (busy, network, merge not linked yet) before mailing a deploy as a promotion.
 - `01_grant_access` prints job-account names, never their application ids.
