@@ -6,7 +6,13 @@ view reads FQF's Gold of the same environment).
   3. target test: run refresh/02_refresh_in as sp_<code>_test, then the normal test job (Gold, smoke)
      target dev: each person loads it in their own dev Git folder (02_refresh_in, then their dev job)
 Never prints a person, an address, an id or the key. Usage: python ci/refresh.py --target test"""
-import argparse, os, sys, time
+
+import argparse
+import os
+import sys
+import time
+from pathlib import Path
+
 import yaml
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service import jobs as J
@@ -17,9 +23,9 @@ a = p.parse_args()
 key = os.environ.get("REFRESH_HASH_KEY", "")
 if len(key) < 32:
     sys.exit("REFRESH_HASH_KEY is missing or too short")
-code = yaml.safe_load(open("config/company.yml"))["code"]
-jcfg = yaml.safe_load(open("config/jobs.yml"))
-flow = yaml.safe_load(open("config/refresh.yml"))["flows"][a.target]
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
+jcfg = yaml.safe_load(Path("config/jobs.yml").read_text())
+flow = yaml.safe_load(Path("config/refresh.yml").read_text())["flows"][a.target]
 source, repo = flow["from"], jcfg["repo"][code]
 w = WorkspaceClient()
 me = w.current_user.me().user_name
@@ -27,8 +33,9 @@ print(f"::add-mask::{me}")
 
 
 def app_id(name):
-    found = w.api_client.do("GET", "/api/2.0/preview/scim/v2/ServicePrincipals",
-                            query={"filter": f'displayName eq "{name}"'}).get("Resources", [])
+    found = w.api_client.do(
+        "GET", "/api/2.0/preview/scim/v2/ServicePrincipals", query={"filter": f'displayName eq "{name}"'}
+    ).get("Resources", [])
     if len(found) != 1:
         sys.exit(f"job account {name}: found {len(found)}")
     return found[0]["applicationId"]
@@ -38,12 +45,25 @@ def run(task, env, notebook, params):
     sp = f"sp_{code}_{env}"
     print(f"\n== {task}: {notebook} {params} as {sp}", flush=True)
     started = time.time()
-    run_id = w.jobs.submit(run_name=f"ci_{code}_refresh_{task}", run_as=J.JobRunAs(service_principal_name=app_id(sp)),
-                           tasks=[J.SubmitTask(task_key=task, notebook_task=J.NotebookTask(
-                               notebook_path=f"/Users/{me}/{repo}_{env}/{notebook}", base_parameters=params))]).run_id
+    run_id = w.jobs.submit(
+        run_name=f"ci_{code}_refresh_{task}",
+        run_as=J.JobRunAs(service_principal_name=app_id(sp)),
+        tasks=[
+            J.SubmitTask(
+                task_key=task,
+                notebook_task=J.NotebookTask(
+                    notebook_path=f"/Users/{me}/{repo}_{env}/{notebook}", base_parameters=params
+                ),
+            )
+        ],
+    ).run_id
     while True:
         r = w.jobs.get_run(run_id)
-        if r.state and r.state.life_cycle_state and r.state.life_cycle_state.value in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR"):
+        if (
+            r.state
+            and r.state.life_cycle_state
+            and r.state.life_cycle_state.value in ("TERMINATED", "SKIPPED", "INTERNAL_ERROR")
+        ):
             break
         if time.time() - started > 3600:
             w.jobs.cancel_run(run_id)
@@ -52,7 +72,10 @@ def run(task, env, notebook, params):
     t = r.tasks[0]
     state = t.state.result_state.value if t.state and t.state.result_state else "UNKNOWN"
     out = w.jobs.get_run_output(t.run_id)
-    print(f"{task}: {state} in {time.time() - started:.0f}s", (out.notebook_output.result if out.notebook_output else "") or "")
+    print(
+        f"{task}: {state} in {time.time() - started:.0f}s",
+        (out.notebook_output.result if out.notebook_output else "") or "",
+    )
     if state != "SUCCESS":
         sys.exit(f"{task} failed: {(out.error or state)[:500]}")
 

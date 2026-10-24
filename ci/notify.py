@@ -4,9 +4,18 @@ MAIL_<ROLE> environment variables (GitHub secrets). Addresses and the password a
     python ci/notify.py --flow hotfix --event request --env test ...   # 10j: roles from ci.yml "hotfix", URGENT
     python ci/notify.py --flow hotfix --event backmerge --env prod ...  # 10j: back-merge pull request opened
     python ci/notify.py --flow hotfix --event deployed --env test ...   # 10j: HOTFIX deployed (deploy.yml, ci/flow.py)
+For --event deployed, RESULT (set by deploy.yml to the job status) other than "success" sends to the roles under
+deploy_failed instead (audit B1: a failed deploy goes to the fixers, not to business users).
 """
-import argparse, os, smtplib, ssl, sys
+
+import argparse
+import os
+import smtplib
+import ssl
+import sys
 from email.message import EmailMessage
+from pathlib import Path
+
 import yaml
 
 p = argparse.ArgumentParser()
@@ -17,12 +26,15 @@ p.add_argument("--subject", required=True)
 p.add_argument("--body", required=True)
 a = p.parse_args()
 
-code = yaml.safe_load(open("config/company.yml"))["code"]
-ci = yaml.safe_load(open("config/ci.yml"))
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
+ci = yaml.safe_load(Path("config/ci.yml").read_text())
 if a.flow == "hotfix":
     roles = ci["hotfix"]["backmerge"] if a.event == "backmerge" else ci["hotfix"][a.env][a.event]
 else:
     roles = ci["promotion"][a.env][a.event]
+if a.event == "deployed" and os.environ.get("RESULT", "success") != "success":
+    sect = ci["hotfix"][a.env] if a.flow == "hotfix" else ci["promotion"][a.env]
+    roles = sect.get("deploy_failed", roles)
 to = []
 for r in roles:
     addr = os.environ.get(f"MAIL_{r.upper()}", "")

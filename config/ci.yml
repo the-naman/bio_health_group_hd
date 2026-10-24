@@ -6,13 +6,15 @@ promotion:
     approver: manager
     request: [manager, teamlead, developer]     # "approval needed"
     result: [developer, teamlead, manager]      # "approved" / "rejected" / "checks failed"
-    deployed: [developer, teamlead, manager]    # "test updated: Git folder pulled, job redeployed, t28 passed"
+    deployed: [developer, teamlead, manager]    # "test updated: Git folder pulled, jobs redeployed, t28 passed"
+    deploy_failed: [developer, teamlead, manager, management]   # a failed deploy goes to the fixers only
   prod:
     from: test
     approver: bizmanager
     request: [bizmanager, manager, teamlead]
     result: [developer, teamlead, manager, bizmanager]
     deployed: [developer, teamlead, manager, bizmanager, management]
+    deploy_failed: [developer, teamlead, manager, management]   # audit B1: never to the Business Manager
 
 # 10j: emergency hotfix, for a prod problem that cannot wait for the normal dev -> test -> prod path.
 #   1. branch <code>_hotfix_<name> from <code>_prod (so it holds prod + the fix, nothing from dev or test)
@@ -28,10 +30,27 @@ hotfix:
     request: [management, manager, teamlead, developer, bizmanager]   # 5.13: BizManager hears about test hotfixes too
     result: [developer, teamlead, manager, management, bizmanager]
     deployed: [developer, teamlead, manager, management, bizmanager]   # "HOTFIX deployed to test"
+    deploy_failed: [developer, teamlead, manager, management]
   prod:
     environment: prod                           # same environment (and reviewer) as a normal promotion
     approver: bizmanager
     request: [bizmanager, management, manager]
     result: [developer, teamlead, manager, bizmanager, management]
     deployed: [developer, teamlead, manager, bizmanager, management]   # "HOTFIX deployed to prod"
+    deploy_failed: [developer, teamlead, manager, management]
   backmerge: [developer, teamlead, manager]     # "back-merge pull request prod -> dev opened"
+
+# Shared-code drift guard (ci/shared.py, docs/adr/0007): every file below must be identical in both repos.
+shared:
+  repos: {bhg: the-naman/bio_health_group_hd, fqf: the-naman/flexi_quant_finance_fd}
+  roots: [src/lh/, ci/, simulator/, tests/, refresh/, stream/, docs/adr/, .github/]
+  files: [pyproject.toml, .editorconfig, .gitignore, CHANGELOG.md, config/ci.yml, config/alerts.yml, config/jobs.yml,
+          config/gold.yml, config/stream.yml, checks/t29_role_access.ipynb, checks/t30_new_columns.ipynb,
+          checks/t31_refresh.ipynb, checks/t33_dictionary.ipynb, docs/runbook.md, docs/disaster_recovery.md,
+          setup_once/notebook/01_grant_access.ipynb, setup_once/notebook/02_verify_setup.ipynb,
+          config/performance.yml, docs/performance.md, bronze/01_load_bronze.ipynb, bi/01_create_views.ipynb]
+  per_company: [.github/workflows/simulator.yml]          # same purpose, company name inside
+  company_only:                                           # files that exist in one repo only, on purpose
+    bhg: [.github/workflows/setup_secret_scopes.yml, src/lh/group.py]
+    fqf: [.github/workflows/stream.yml, src/lh/prepare.py, src/lh/recon.py, src/lh/stream.py,
+          stream/01_run_stream.ipynb, stream/__init__.py, stream/producer.py]

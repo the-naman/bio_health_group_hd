@@ -8,7 +8,13 @@ person's token. It may only: manage the test/prod jobs (group lh_deploy in confi
   2. redeploy the daily job from it (jobs/01_deploy_jobs, mode apply) - job account, paused schedule, failure mails
   3. run checks/t28_jobs from it (deployed jobs = config)
 Never prints the home folder, a person or an address. Usage: python ci/deploy.py --env test --sha <commit>"""
-import argparse, os, sys, time
+
+import argparse
+import os
+import sys
+import time
+from pathlib import Path
+
 import yaml
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
@@ -19,12 +25,12 @@ p.add_argument("--env", required=True, choices=["test", "prod"])
 p.add_argument("--sha", required=True)
 a = p.parse_args()
 
-code = yaml.safe_load(open("config/company.yml"))["code"]
-jcfg = yaml.safe_load(open("config/jobs.yml"))
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
+jcfg = yaml.safe_load(Path("config/jobs.yml").read_text())
 repo = jcfg["repo"][code]
 w = WorkspaceClient()
 me = w.current_user.me().user_name
-print(f"::add-mask::{me}")                                  # GitHub hides it from the log from here on
+print(f"::add-mask::{me}")  # GitHub hides it from the log from here on
 folder = f"/Users/{me}/{repo}_{a.env}"
 branch = f"{code}_{a.env}"
 
@@ -43,12 +49,18 @@ except NotFound:
     repo_id = w.repos.create(url=url, provider="gitHub", path=folder).id
     print("created (first deploy as the deploy account)")
 job_sp = jcfg["run_as"][a.env].format(code=code)
-found = w.api_client.do("GET", "/api/2.0/preview/scim/v2/ServicePrincipals",
-                        query={"filter": f'displayName eq "{job_sp}"'}).get("Resources", [])
+found = w.api_client.do(
+    "GET", "/api/2.0/preview/scim/v2/ServicePrincipals", query={"filter": f'displayName eq "{job_sp}"'}
+).get("Resources", [])
 if len(found) != 1:
     sys.exit(f"job account {job_sp}: found {len(found)}")
-w.api_client.do("PATCH", f"/api/2.0/permissions/repos/{repo_id}", body={"access_control_list": [
-    {"service_principal_name": found[0]["applicationId"], "permission_level": "CAN_READ"}]})
+w.api_client.do(
+    "PATCH",
+    f"/api/2.0/permissions/repos/{repo_id}",
+    body={
+        "access_control_list": [{"service_principal_name": found[0]["applicationId"], "permission_level": "CAN_READ"}]
+    },
+)
 print(f"{job_sp} may read it")
 
 # 1. Git folder -> merged commit
@@ -66,8 +78,12 @@ def run_notebook(task, notebook, params):
     started = time.time()
     run_id = w.jobs.submit(
         run_name=f"ci_{code}_{a.env}_{task}",
-        tasks=[J.SubmitTask(task_key=task,
-                            notebook_task=J.NotebookTask(notebook_path=f"{folder}/{notebook}", base_parameters=params))],
+        tasks=[
+            J.SubmitTask(
+                task_key=task,
+                notebook_task=J.NotebookTask(notebook_path=f"{folder}/{notebook}", base_parameters=params),
+            )
+        ],
     ).run_id
     while True:
         run = w.jobs.get_run(run_id)

@@ -65,7 +65,7 @@ jobs:
           [ "$FLOW" = "hotfix" ] && what=" Hotfix from $HEAD (pull request #$PR)."
           if [ "$RESULT" = "success" ]; then
             subject="Deployed ${GITHUB_SHA::7} to $GITHUB_REF_NAME"
-            body="The $GITHUB_REF_NAME Git folder is at ${GITHUB_SHA::7}, the daily job is redeployed and t28_jobs passed.$what"
+            body="The $GITHUB_REF_NAME Git folder is at ${GITHUB_SHA::7}, the jobs are redeployed and t28_jobs passed.$what"
             [ "$FLOW" = "hotfix" ] && [ "${{ steps.env.outputs.env }}" = "prod" ] && \
               body="$body A back-merge pull request into dev follows (backmerge.yml)."
           else

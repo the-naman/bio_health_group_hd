@@ -16,6 +16,7 @@ deploy() creates or updates the job by name and sets its permissions exactly. pl
 Two kinds of job (KINDS), same engine: "daily" (config/jobs.yml) and "stream" (5.14: config/jobs.yml with the keys
 under job: in config/stream.yml, e.g. lh_fqf_<env>_stream; a company without stream tasks gets no stream job).
 Folder paths, job-account IDs and mail addresses are looked up at deploy time, so no person or ID is stored in the repo."""
+
 import os
 import yaml
 
@@ -75,7 +76,9 @@ def my_role(cfg, env, is_member):
         return None
     roles = [r for g, r in cfg["dev_roles"].items() if is_member(g)]
     if len(roles) != 1:
-        raise ValueError(f"dev jobs are deployed by one role login (Developer, Team Lead or Manager); found {roles or 'none'}")
+        raise ValueError(
+            f"dev jobs are deployed by one role login (Developer, Team Lead or Manager); found {roles or 'none'}"
+        )
     return roles[0]
 
 
@@ -100,10 +103,12 @@ def notify_plan(cfg, code, env, role=None):
     No addresses here."""
     who = recipients(cfg, env, role)
     told = informed(cfg, env, role)
-    mine = who if env == "dev" else []                  # 5.13: in dev the owner also hears about a success
-    return {"job": who + [r for r in told if r not in who],
-            "tasks": {t["key"]: who for t in tasks_for(cfg, code) if t.get("notify")},
-            "success": mine + [r for r in told if r not in mine]}
+    mine = who if env == "dev" else []  # 5.13: in dev the owner also hears about a success
+    return {
+        "job": who + [r for r in told if r not in who],
+        "tasks": {t["key"]: who for t in tasks_for(cfg, code) if t.get("notify")},
+        "success": mine + [r for r in told if r not in mine],
+    }
 
 
 def mail_roles(cfg, env, role=None):
@@ -145,7 +150,9 @@ def check(tasks, root=None, cfg=None):
                 raise ValueError(f"{t['key']}: unknown dependency {d}")
         if t.get("run_if", "ALL_SUCCESS") not in RUN_IF:
             raise ValueError(f"{t['key']}: bad run_if")
-        if root and not any(os.path.exists(os.path.join(root, t["notebook"] + ext)) for ext in ("", ".py", ".ipynb", ".sql")):
+        if root and not any(
+            os.path.exists(os.path.join(root, t["notebook"] + ext)) for ext in ("", ".py", ".ipynb", ".sql")
+        ):
             raise ValueError(f"{t['key']}: notebook {t['notebook']} not found in the repo")
     done, todo = set(), {t["key"]: set(t["after"]) for t in tasks}
     while todo:
@@ -173,11 +180,16 @@ def build(cfg, code, env, home, run_as_id=None, mail=None, role=None):
             raise ValueError(f"no mail address for {missing} (scope lh_{env}, keys mail_<role>)")
     out_tasks = []
     for t in tasks:
-        task = {"task_key": t["key"],
-                "notebook_task": {"notebook_path": f"{folder}/{t['notebook']}", "source": "WORKSPACE",
-                                  "base_parameters": {"env": env, **t.get("params", {})}},
-                "timeout_seconds": t["timeout"] * 60,
-                "max_retries": t["retries"]}
+        task = {
+            "task_key": t["key"],
+            "notebook_task": {
+                "notebook_path": f"{folder}/{t['notebook']}",
+                "source": "WORKSPACE",
+                "base_parameters": {"env": env, **t.get("params", {})},
+            },
+            "timeout_seconds": t["timeout"] * 60,
+            "max_retries": t["retries"],
+        }
         if t["retries"]:
             task.update(min_retry_interval_millis=300000, retry_on_timeout=False)
         if t["after"]:
@@ -190,33 +202,41 @@ def build(cfg, code, env, home, run_as_id=None, mail=None, role=None):
     tags = {"project": "lh", "company": code, "env": env}
     if env == "dev":
         tags["owner_role"] = role
-    settings = {"name": name, "tags": tags,
-                "max_concurrent_runs": 1,
-                "timeout_seconds": cfg["job_timeout_minutes"] * 60,
-                "queue": {"enabled": True},
-                "tasks": out_tasks}
+    settings = {
+        "name": name,
+        "tags": tags,
+        "max_concurrent_runs": 1,
+        "timeout_seconds": cfg["job_timeout_minutes"] * 60,
+        "queue": {"enabled": True},
+        "tasks": out_tasks,
+    }
     if mail:
         settings["email_notifications"] = {"on_failure": [mail[r] for r in plan["job"]]}
-        if plan["success"]:                                   # dev: the owner (and dev_inform roles) hear about every run
+        if plan["success"]:  # dev: the owner (and dev_inform roles) hear about every run
             settings["email_notifications"]["on_success"] = [mail[r] for r in plan["success"]]
         settings["notification_settings"] = {"no_alert_for_skipped_runs": True, "no_alert_for_canceled_runs": True}
     if env != "dev":
         if not run_as_id:
             raise ValueError(f"{env} needs the job account's application id")
         settings["run_as"] = {"service_principal_name": run_as_id}
-        settings["schedule"] = {"quartz_cron_expression": schedule_of(cfg, code, env), "timezone_id": cfg["timezone"],
-                                "pause_status": "PAUSED" if cfg["paused"] else "UNPAUSED"}
+        settings["schedule"] = {
+            "quartz_cron_expression": schedule_of(cfg, code, env),
+            "timezone_id": cfg["timezone"],
+            "pause_status": "PAUSED" if cfg["paused"] else "UNPAUSED",
+        }
     return settings
 
 
 def acl(cfg, env, owner):
     """owner = ("user_name", <name>) or ("service_principal_name", <application id>)."""
-    return ([{owner[0]: owner[1], "permission_level": "IS_OWNER"}]
-            + [{"group_name": g, "permission_level": p} for g, p in cfg["permissions"][env].items()])
+    return [{owner[0]: owner[1], "permission_level": "IS_OWNER"}] + [
+        {"group_name": g, "permission_level": p} for g, p in cfg["permissions"][env].items()
+    ]
 
 
 class Api:
     """Workspace REST API of whoever runs the deploy notebook."""
+
     def __init__(self, w):
         self.w = w
 
@@ -227,7 +247,9 @@ class Api:
         return self.call("GET", "/api/2.0/preview/scim/v2/Me")["userName"]
 
     def service_principal(self, name):
-        res = self.call("GET", "/api/2.0/preview/scim/v2/ServicePrincipals", query={"filter": f'displayName eq "{name}"'})
+        res = self.call(
+            "GET", "/api/2.0/preview/scim/v2/ServicePrincipals", query={"filter": f'displayName eq "{name}"'}
+        )
         found = res.get("Resources", [])
         if len(found) != 1:
             raise ValueError(f"job account {name}: found {len(found)}")
@@ -245,8 +267,11 @@ class Api:
         while True:
             q = {"limit": 100, **({"page_token": token} if token else {})}
             res = self.call("GET", "/api/2.2/jobs/list", query=q)
-            out += [(j["job_id"], j["settings"]["name"]) for j in res.get("jobs", [])
-                    if j.get("settings", {}).get("name", "").startswith(prefix)]
+            out += [
+                (j["job_id"], j["settings"]["name"])
+                for j in res.get("jobs", [])
+                if j.get("settings", {}).get("name", "").startswith(prefix)
+            ]
             token = res.get("next_page_token")
             if not token:
                 return out
@@ -281,7 +306,7 @@ def deploy(api, cfg, root, code, env, apply=False, mail=None, role=None):
     job_id = api.find_job(settings["name"])
     action = "update" if job_id else "create"
     if not job_id and env == "dev":
-        old = api.find_job(cfg["name"].format(code=code, env=env))     # 5.9 shared dev job becomes this person's job
+        old = api.find_job(cfg["name"].format(code=code, env=env))  # 5.9 shared dev job becomes this person's job
         if old:
             job_id, action = old, "rename 5.9 dev job"
     if apply:
@@ -291,12 +316,20 @@ def deploy(api, cfg, root, code, env, apply=False, mail=None, role=None):
             job_id = api.create(settings)
         api.set_acl(job_id, acl(cfg, env, owner))
     plan = notify_plan(cfg, code, env, role)
-    return {"job": settings["name"], "action": action, "job_id": job_id,
-            "tasks": " -> ".join(t["task_key"] for t in settings["tasks"]),
-            "run_as": f"you ({role})" if env == "dev" else cfg["run_as"][env].format(code=code),
-            "schedule": (settings["schedule"]["quartz_cron_expression"] + " " + settings["schedule"]["pause_status"])
-                        if "schedule" in settings else "on demand",
-            "notify": "; ".join([f"job: {', '.join(plan['job'])}"] + [f"{k}: {', '.join(v)}" for k, v in plan["tasks"].items()]
-                                + ([f"success: {', '.join(plan['success'])}"] if plan["success"] else []))
-                      if mail else "none"}
-    
+    return {
+        "job": settings["name"],
+        "action": action,
+        "job_id": job_id,
+        "tasks": " -> ".join(t["task_key"] for t in settings["tasks"]),
+        "run_as": f"you ({role})" if env == "dev" else cfg["run_as"][env].format(code=code),
+        "schedule": (settings["schedule"]["quartz_cron_expression"] + " " + settings["schedule"]["pause_status"])
+        if "schedule" in settings
+        else "on demand",
+        "notify": "; ".join(
+            [f"job: {', '.join(plan['job'])}"]
+            + [f"{k}: {', '.join(v)}" for k, v in plan["tasks"].items()]
+            + ([f"success: {', '.join(plan['success'])}"] if plan["success"] else [])
+        )
+        if mail
+        else "none",
+    }

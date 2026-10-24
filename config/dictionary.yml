@@ -1,0 +1,183 @@
+# Data dictionary for Bio Health Group (BHG), including the group view of both companies. Applied by
+# src/lh/dictionary.py in the BI step of the daily job. One line per description, no quotes.
+silver:
+  hospitals: {about: BHG hospitals, current version per hospital}
+  departments: {about: Hospital departments}
+  doctors: {about: Doctors from MySQL with history of changes (SCD2)}
+  patients: {about: Patients with history of changes (SCD2). Personal columns are masked}
+  appointments: {about: Outpatient appointments (completed, cancelled or no_show)}
+  admissions: {about: Inpatient admissions (admitted or discharged)}
+  treatments: {about: Treatments given during an admission}
+  pharmacy_sales: {about: Pharmacy sales per patient}
+  invoices: {about: Patient invoices with payer type (self, insurance or fqf_loan) and status (unpaid or paid)}
+  payments: {about: Payments received against invoices, including payouts from FQF hospital-bill loans}
+  insurance_claims: {about: Insurance claims from Salesforce}
+gold:
+  dim_date:
+    about: Calendar dimension, one row per day 2025 to 2027, shared by both companies so they join on date_key. Fiscal year runs April to March (India).
+    columns:
+      date_key: Day as a number yyyymmdd; joins every fact to this table
+      date: Calendar date
+      year: Calendar year
+      quarter: Calendar quarter 1 to 4
+      month: Month number 1 to 12
+      month_name: Month name, for example October
+      year_month: Year and month as text yyyy-mm, used for monthly charts
+      day: Day of the month
+      day_of_week: Day of the week as a number, 1 = Monday
+      day_name: Day name, for example Monday
+      week_of_year: ISO week number
+      is_weekend: True on Saturday and Sunday
+      is_month_end: True on the last day of the month
+      fiscal_year: Indian financial year, April to March, for example FY2026-27
+      fiscal_quarter: Fiscal quarter 1 to 4 within the financial year, 1 = April to June
+  dim_hospital:
+    about: One row per BHG hospital plus the unknown hospital (key -1); the Business Manager sees only their hospitals in the fact
+    columns:
+      hospital_key: Surrogate key, hash of hospital_id; -1 = unknown
+      hospital_id: Hospital code, for example HSP01
+      hospital_name: Hospital name
+      city: City, standardised
+      state: State
+      beds: Number of beds
+      opened_date: Date the hospital opened
+      is_active: False if the hospital was closed
+  dim_doctor:
+    about: Doctors with history (SCD2); join on doctor_key valid for the event date
+    columns:
+      doctor_key: Surrogate key, hash of doctor_id and valid_from; -1 = unknown
+      doctor_id: Doctor code (token in test and prod)
+      specialty: Medical specialty
+      status: active or on_leave
+      dept_id: Department code
+      department: Department name
+      hospital_id: Hospital the doctor works at
+      valid_from: First day this version applies
+      valid_to: Last day this version applies
+      is_current: True for the current version
+  dim_patient:
+    about: Patients with history (SCD2). Names, phones and dates of birth are not in Gold; ids are tokens for most readers in test and prod
+    columns:
+      patient_key: Surrogate key, hash of patient_id and valid_from; -1 = unknown
+      patient_id: Patient id (token in test and prod)
+      gender: Gender as recorded
+      city: City, standardised
+      insurance_provider: Insurer of the patient, if any
+      preferred_language: Preferred language (new source column from 15 Oct 2026)
+      id_fingerprint: Keyed hash of the national id, used only to match people across companies (masked)
+      contact_fingerprint: Keyed hash of phone and date of birth, used only to flag look-alikes (masked)
+      valid_from: First day this version applies
+      valid_to: Last day this version applies
+      is_current: True for the current version
+  dim_payer:
+    about: Who paid an invoice line (self, insurer or FQF loan) and how
+    columns:
+      payer_key: Surrogate key of the payer combination
+      payer_type: self, insurance or fqf_loan
+      insurer: Insurance company, if any
+      pay_mode: Payment mode, for example card or upi
+  fact_bhg_event:
+    about: One row per money event of a patient (consult, treatment, room charge, pharmacy, discount, tax, payment); amounts in INR. Row filter limits the Business Manager to their hospitals
+    columns:
+      event_key: Surrogate key of the event, unique
+      event_id: Event id from the source
+      event_type: consult, treatment, room, pharmacy, discount, tax or payment
+      event_group: charge, adjustment or collection
+      date_key: Day of the event, joins dim_date
+      patient_key: Joins dim_patient, version valid on the event date
+      doctor_key: Joins dim_doctor, version valid on the event date
+      hospital_key: Joins dim_hospital
+      payer_key: Joins dim_payer
+      invoice_id: Invoice the event belongs to (token in test and prod)
+      admission_id: Admission the event belongs to, if any (token in test and prod)
+      amount: Amount of the event, INR; discounts are negative
+      quantity: Units, for example days of a room charge or pharmacy items
+      is_fqf_loan: True if the payment came from an FQF hospital-bill loan
+      age_at_event: Age of the patient on the event date, in years (the date of birth itself is not in Gold)
+      age_band: Age grouped into bands
+  dim_company:
+    about: The two companies of the group
+    columns:
+      company_key: Surrogate key of the company
+      company_code: bhg or fqf
+      company_name: Company name
+      role: parent or child
+      industry: healthcare or lending
+  map_group_customer:
+    about: Maps each member record (BHG patient or FQF customer) to one group person
+    columns:
+      company_code: bhg or fqf
+      member_id: Patient or customer id in that company (token in test and prod)
+      group_customer_key: The group person this record belongs to
+  dim_group_customer:
+    about: One row per person across both companies; matched by keyed Aadhaar hash, then hospital-bill link, then reviewed decisions
+    columns:
+      group_customer_key: Surrogate key of the person; -1 = unknown
+      match_method: aadhaar (same fingerprint in both companies), invoice_link, review or one company
+      is_bhg_patient: True if the person is a BHG patient
+      is_fqf_customer: True if the person is an FQF customer
+      is_shared: True if the person is a customer of both companies
+      city: City, standardised
+      gender: Gender as recorded
+      id_fingerprint: Keyed hash of the national id (masked)
+  group_match_review:
+    about: Look-alike pairs (same phone and date of birth, different national id) waiting for a Manager decision; never merged automatically
+    columns:
+      review_key: Number used to record a decision
+      bhg_patient_id: Patient of the pair (token in test and prod)
+      fqf_customer_id: Customer of the pair (token in test and prod)
+      reason: Why the pair is a look-alike, for example same phone and date of birth, different Aadhaar
+      status: open or decided
+      decision: same or different, once decided
+  group_intercompany:
+    about: One row per BHG invoice paid by an FQF hospital-bill loan; BHG received versus FQF paid out, so intercompany money counts once
+    columns:
+      invoice_id: BHG invoice (token in test and prod)
+      bhg_received: Amount BHG received from FQF, INR
+      bhg_date_key: Day BHG received it
+      fqf_paid_out: Amount FQF paid out for the invoice, INR
+      fqf_date_key: Day FQF paid it out
+      difference: bhg_received minus fqf_paid_out, INR
+      status: matched, amount_differs, bhg_only or fqf_only
+  fact_group_daily:
+    about: Group figures per day, company and measure; intercompany amounts removed in group_amount
+    columns:
+      date_key: Day, joins dim_date
+      company_key: Joins dim_company
+      company_code: bhg or fqf
+      measure: BHG billed, tax, collected; FQF disbursed, interest_due, collected, fees
+      events: Number of events
+      amount: Amount in the company books, INR
+      intercompany: Part of the amount that is a payment between the two companies, INR
+      group_amount: amount minus intercompany, INR; use this for group totals
+  group_exposure:
+    about: What each person owes the group today (FQF outstanding plus BHG unpaid) against the strictest credit policy limit
+    columns:
+      group_customer_key: Joins dim_group_customer
+      as_of_date: Date the exposure was calculated
+      open_loans: Open FQF loans of the person
+      fqf_outstanding: FQF principal still outstanding, INR
+      bhg_unpaid: BHG invoices still unpaid, INR
+      total_exposure: fqf_outstanding plus bhg_unpaid, INR
+      policy_limit: Maximum exposure allowed by the credit policy, INR
+      over_limit: True if total_exposure is above policy_limit
+      is_late: True if any FQF instalment of the person is overdue
+  fact_group_kpi:
+    about: Headline group numbers, one row per KPI
+    columns:
+      kpi: Name of the KPI, for example people_shared or people_over_limit
+      value: Value of the KPI
+      as_of_date: Date the KPI was calculated
+views:
+  v_bhg_revenue_daily: {about: Money events per day, hospital, event type, payer type and age band (no personal columns)}
+  v_group_daily: {about: Group figures per day, company and measure with intercompany removed}
+  v_group_kpi: {about: Headline group numbers}
+  v_group_exposure: {about: People owing the group by city and shared, over-limit and late flags, with totals}
+  v_group_customers: {about: People by match method, shared or not, and city}
+  v_health_runs: {about: Last run of each pipeline step and its runs and failures in the last 7 days}
+  v_health_freshness: {about: How far the company fact reaches and how many days it is behind today}
+  v_health_dq: {about: Latest data-quality result per table and rule}
+  v_health_quarantine: {about: Rows held in quarantine per table and rule (no row content)}
+  v_health_quarantine_daily: {about: New quarantine rows per IST day, table and rule}
+  v_health_rescued: {about: Column names found in Bronze rescued data, planned or new (names only)}
+  v_health_merge: {about: Group merge runs, newest first, with the FQF days still waiting}

@@ -11,6 +11,7 @@ The data in the table is never changed, so the pipeline keeps working on real va
 A row filter is a SQL function attached to a table. It decides per row whether the reader sees it:
 a limited group sees only the rows of its listed ids (e.g. its hospitals), everyone else every row.
 """
+
 import os
 import re
 
@@ -18,7 +19,7 @@ import yaml
 
 from lh import common
 
-MASKED = {      # what a reader outside the clear groups sees; v is the column value (text)
+MASKED = {  # what a reader outside the clear groups sees; v is the column value (text)
     "last4": "CASE WHEN length(v) > 4 THEN concat(repeat('X', length(v) - 4), right(v, 4)) ELSE repeat('X', length(v)) END",
     "initial": "concat(left(trim(v), 1), '***')",
     "token": "concat(regexp_extract(v, '^[A-Z]{0,4}', 0), '#', upper(left(sha2(v, 256), 8)))",
@@ -39,7 +40,7 @@ def clear_sql(spark, env, clear=None):
         if not re.match(r"^[a-z_]+$", g):
             raise ValueError(f"group name not allowed: {g}")
     parts = [f"is_account_group_member('{g}')" for g in groups]
-    if clear is None and env in p.get("pipeline", {}):          # test, prod: the job account
+    if clear is None and env in p.get("pipeline", {}):  # test, prod: the job account
         user = spark.sql("SELECT session_user()").first()[0]
         if not re.match(UUID, user):
             raise RuntimeError(f"in {env} the masks must be applied by the job account {p['pipeline'][env]}")
@@ -79,8 +80,10 @@ def bronze_names():
     """{table: {silver column: bronze column}}, taken from the renames in config/silver.yml."""
     with open(os.path.join(common.repo_root(), "config", "silver.yml")) as f:
         tables = yaml.safe_load(f)["tables"]
-    return {t: {c: (r[1] if isinstance(r, list) and len(r) > 1 else c) for c, r in spec["columns"].items()}
-            for t, spec in tables.items()}
+    return {
+        t: {c: (r[1] if isinstance(r, list) and len(r) > 1 else c) for c, r in spec["columns"].items()}
+        for t, spec in tables.items()
+    }
 
 
 def plan(p, env, layer, columns, renames):
@@ -94,7 +97,8 @@ def plan(p, env, layer, columns, renames):
     id_columns = ids.get("columns", []) if env in ids.get("environments", []) else []
     if layer == "silver":
         for table, wanted in p["personal"].items():
-            if table.startswith(("dim_", "fact_")): continue          # gold tables are checked in gold
+            if table.startswith(("dim_", "fact_")) or table in p.get("gold_tables", []):
+                continue  # gold tables are checked in gold
             lost = [c for c in wanted if c not in columns.get(table, {})]
             if lost:
                 raise ValueError(f"privacy.yml: silver.{table} has no column {lost}")
@@ -137,17 +141,29 @@ def status(spark, cfg, env):
         columns = columns_of(spark, cat, layer)
         for table, column, kind in plan(p, env, layer, columns, renames):
             dtype = columns[table][column]
-            rows.append({"layer": layer, "table": table, "column": column, "kind": kind, "dtype": dtype,
-                         "wanted": function_name(cfg, kind, dtype).split(".")[-1],
-                         "actual": have.get((layer, table, column))})
+            rows.append(
+                {
+                    "layer": layer,
+                    "table": table,
+                    "column": column,
+                    "kind": kind,
+                    "dtype": dtype,
+                    "wanted": function_name(cfg, kind, dtype).split(".")[-1],
+                    "actual": have.get((layer, table, column)),
+                }
+            )
     return rows
 
 
 def apply(spark, cfg, env):
     """Attach the masks. Safe to run again: a column that already has the right mask is left alone."""
     cat = cfg["catalog"]
-    ready = {r[0] for r in spark.sql(
-        f"SELECT routine_name FROM {cat}.information_schema.routines WHERE routine_schema = 'ops'").collect()}
+    ready = {
+        r[0]
+        for r in spark.sql(
+            f"SELECT routine_name FROM {cat}.information_schema.routines WHERE routine_schema = 'ops'"
+        ).collect()
+    }
     done = {"set": 0, "kept": 0, "functions_refreshed": 0}
     rows = list(status(spark, cfg, env))
     if env in load().get("pipeline", {}):
@@ -204,8 +220,11 @@ def apply_row_filters(spark, cfg, env):
     """Attach the row filters of privacy.yml to the gold tables that exist. Safe to run again.
     The function is replaced on every run, so a change in privacy.yml takes effect at once."""
     p, cat = load(), cfg["catalog"]
-    tables = {r[0] for r in spark.sql(f"""SELECT table_name FROM {cat}.information_schema.tables
-                                          WHERE table_schema = 'gold'""").collect()}
+    tables = {
+        r[0]
+        for r in spark.sql(f"""SELECT table_name FROM {cat}.information_schema.tables
+                                          WHERE table_schema = 'gold'""").collect()
+    }
     have = row_filters_now(spark, cat)
     done = {"set": 0, "kept": 0}
     for table, spec in p.get("row_filters", {}).items():
@@ -221,4 +240,3 @@ def apply_row_filters(spark, cfg, env):
         spark.sql(f"ALTER TABLE {target} SET ROW FILTER {name} ON (`{spec['column']}`)")
         done["set"] += 1
     return done
-
