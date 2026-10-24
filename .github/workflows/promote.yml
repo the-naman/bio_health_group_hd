@@ -54,8 +54,15 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.11"
-      - run: pip install --quiet pyyaml==6.0.3 ruff==0.15.11 pytest==8.3.3 pyspark==3.5.3 pillow==11.0.0   # Spark tests use the runner's Java; Pillow for the FQF slip images
+      - run: pip install --quiet pyyaml==6.0.3 ruff==0.15.11 pytest==8.3.3 pyspark==3.5.3 pillow==11.0.0 jsonschema==4.23.0 regex==2024.11.6   # Spark tests use the runner's Java; Pillow for the FQF slip images
       - run: python ci/checks.py
+      - name: Asset Bundle valid against the bundle schema (pinned Databricks CLI, checksum verified, no login)
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/cli.zip" https://github.com/databricks/cli/releases/download/v1.20.0/databricks_cli_1.20.0_linux_amd64.zip
+          echo "dff217c237c4e53b2b2427ee131cfe5bace3178ed156cd98860d56feb13ce02f  $RUNNER_TEMP/cli.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/cli.zip" databricks -d "$RUNNER_TEMP/cli"
+          "$RUNNER_TEMP/cli/databricks" bundle schema > "$RUNNER_TEMP/bundle_schema.json"
+          python ci/bundle.py --check --schema "$RUNNER_TEMP/bundle_schema.json"
       - run: python -m pytest -p no:cacheprovider   # tests/: config rules, simulator, scenarios on local Spark
 
   request:
