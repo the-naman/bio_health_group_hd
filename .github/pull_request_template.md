@@ -1,9 +1,10 @@
 ## What changes
+<!-- While the role GitHub accounts are flagged, the-naman opens the pull request: name who prepared it. -->
 <!-- One or two lines: what and why. Name the requirement or audit item if there is one. -->
 
 ## Promotion path
-- [ ] dev -> test (Manager approves)
-- [ ] test -> prod (Business Manager approves)
+- [ ] dev -> test (environment reviewer approves; today the-naman)
+- [ ] test -> prod (environment reviewer approves; today the-naman)
 - [ ] hotfix (`<code>_hotfix_<name>` from prod; urgent approval)
 
 ## Checked before asking for review
