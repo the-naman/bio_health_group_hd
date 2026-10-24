@@ -116,8 +116,9 @@ When something goes wrong (full playbook: `docs/runbook.md`; losing data, secret
 
 ## Working on this repo (standards)
 - Branch `<code>_dev`, run your own dev job, then open a pull request; the PR template lists what to check.
-- `python ci/checks.py` runs the same 8 checks as CI: compile, no notebook outputs, YAML, job config, dashboards,
-  no email or token, and ruff lint and format (rules in `pyproject.toml`; run `ruff format .` before committing).
+- `python ci/checks.py` runs the same 9 checks as CI (plus the shared-file guard in CI): compile, no notebook outputs, YAML, job config, dashboards,
+  no email or token, ruff lint and format (rules in `pyproject.toml`; run `ruff format .` before committing), and
+  actions pinned by commit hash and pip versions pinned.
 - `python -m pytest` runs the tests in `tests/` (about 2 minutes; Spark scenarios need Java). CI runs them on every PR.
 - Shared code (`src/lh`, `ci`, `simulator`, `tests`, most workflows) must stay identical in both repos; CI checks it on
   every PR (`ci/shared.py`, list in `config/ci.yml` -> shared). Change both repos' dev branches before promoting.

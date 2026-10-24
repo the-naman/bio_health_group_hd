@@ -1,0 +1,14 @@
+# Dependabot (same file in both repos): weekly pull requests that move the pinned GitHub actions (commit hashes in
+# .github/workflows) to their newest release. They go to the default branch (<code>_dev) and are promoted like any change.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"

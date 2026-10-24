@@ -51,14 +51,14 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: bhg_${{ matrix.env }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.11"
       - name: Install libraries
-        run: pip install boto3 pillow
+        run: pip install --quiet boto3==1.43.100 pillow==11.0.0
       - name: Note when writing starts
         id: start
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
@@ -92,15 +92,16 @@ jobs:
         run: |
           if [ "${{ matrix.env }}" = "test" ]; then files="$FILES_TEST"; else files="$FILES_PROD"; fi
           if [ "${{ matrix.env }}" = "dev" ] || [ "$files" = "0" ] || [ -z "$files" ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"; echo "nothing to chain ($files new files)"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            if [ "${{ matrix.env }}" = "dev" ]; then echo "dev is never chained (runs on demand)"; else echo "nothing to chain: no new files"; fi
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: steps.need.outputs.run == 'true'
         with:
           ref: bhg_${{ matrix.env }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         if: steps.need.outputs.run == 'true'
         with:
           python-version: "3.11"
@@ -114,5 +115,5 @@ jobs:
           SINCE_PROD: ${{ needs.simulate.outputs.since_prod }}
         run: |
           if [ "${{ matrix.env }}" = "test" ]; then since="$SINCE_TEST"; else since="$SINCE_PROD"; fi
-          pip install --quiet pyyaml databricks-sdk==0.143.0
+          pip install --quiet pyyaml==6.0.3 databricks-sdk==0.143.0
           python ci/chain.py --env ${{ matrix.env }} --since "$since"
