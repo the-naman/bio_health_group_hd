@@ -4,10 +4,18 @@ fix is not lost at the next promotion, and mail the roles in config/ci.yml (hotf
 "Dev has it" = merging prod into dev would not change dev's files (works for merge and squash commits alike).
 Needs the full history (fetch-depth: 0). Env: GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_OUTPUT.
 """
-import json, os, subprocess, sys, urllib.error, urllib.request
+
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
 import yaml
 
-code = yaml.safe_load(open("config/company.yml"))["code"]
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
 prod, dev = f"{code}_prod", f"{code}_dev"
 repo, server = os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SERVER_URL", "https://github.com")
 
@@ -33,11 +41,13 @@ print(f"{dev} is missing changes from {prod}{' (with conflicts)' if conflict els
 
 
 def api(method, path, body=None):
-    req = urllib.request.Request(f"https://api.github.com/repos/{repo}{path}", method=method,
-                                 data=json.dumps(body).encode() if body else None,
-                                 headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
-                                          "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}{path}",
+        method=method,
+        data=json.dumps(body).encode() if body else None,
+        headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - fixed https://api.github.com URL
         return json.load(r)
 
 
@@ -49,11 +59,18 @@ try:
         url = open_prs[0]["html_url"]
         print(f"back-merge pull request already open: {url}")
     else:
-        pr = api("POST", "/pulls", {"title": f"Back-merge {prod} into {dev} (hotfix)", "head": prod, "base": dev,
-                                    "body": "Opened by backmerge.yml after a prod deploy: prod holds a change dev "
-                                            "does not have (a hotfix). Merge with 'Create a merge commit'."
-                                            + (" There are conflicts: resolve them on a branch from dev." if conflict
-                                               else "")})
+        pr = api(
+            "POST",
+            "/pulls",
+            {
+                "title": f"Back-merge {prod} into {dev} (hotfix)",
+                "head": prod,
+                "base": dev,
+                "body": "Opened by backmerge.yml after a prod deploy: prod holds a change dev "
+                "does not have (a hotfix). Merge with 'Create a merge commit'."
+                + (" There are conflicts: resolve them on a branch from dev." if conflict else ""),
+            },
+        )
         url = pr["html_url"]
         print(f"back-merge pull request opened: {url}")
 except urllib.error.HTTPError as e:

@@ -23,6 +23,9 @@ to whoever reads the view (Unity Catalog checks the reader, not the view). They 
          v_group_exposure        people owing the group, by city and flags
          v_group_customers       people by match method, shared or not, city
 """
+
+from lh import dictionary
+
 VIEWS = {
     "bhg": {
         "v_bhg_revenue_daily": """
@@ -108,14 +111,20 @@ VIEWS = {
 # A view whose source table may not exist yet (the stream job creates it on its first run) is built empty, with the
 # same columns, so dashboards, t00 and t26 keep working in a new environment.
 EMPTY_UNTIL = {
-    "v_fqf_payments_live": ("silver.payment_events", """
+    "v_fqf_payments_live": (
+        "silver.payment_events",
+        """
         SELECT CAST(NULL AS DATE) AS day, CAST(NULL AS INT) AS hour_ist, CAST(NULL AS STRING) AS method,
                CAST(NULL AS STRING) AS status, CAST(NULL AS STRING) AS reason, CAST(0 AS BIGINT) AS events,
-               CAST(NULL AS DECIMAL(28,2)) AS amount WHERE FALSE"""),
-    "v_fqf_payment_alerts": ("gold.payment_failure_windows", """
+               CAST(NULL AS DECIMAL(28,2)) AS amount WHERE FALSE""",
+    ),
+    "v_fqf_payment_alerts": (
+        "gold.payment_failure_windows",
+        """
         SELECT CAST(NULL AS TIMESTAMP) AS window_start_ist, CAST(NULL AS TIMESTAMP) AS window_end_ist,
                CAST(NULL AS STRING) AS customer_ref, CAST(NULL AS INT) AS failed_payments,
-               CAST(NULL AS DECIMAL(28,2)) AS failed_amount WHERE FALSE"""),
+               CAST(NULL AS DECIMAL(28,2)) AS failed_amount WHERE FALSE""",
+    ),
 }
 
 FACTS = {"bhg": ("fact_bhg_event", ""), "fqf": ("fact_fqf_event", "AND event_type <> 'emi_due'")}
@@ -169,11 +178,14 @@ def wanted(cfg):
 
 
 def build(spark, cfg):
-    """Create or replace every view of this catalog. Returns {view: rows}."""
-    cat, out = cfg["catalog"], {}
+    """Create or replace every view of this catalog, with its description from config/dictionary.yml.
+    Returns {view: rows}."""
+    cat, out, words = cfg["catalog"], {}, dictionary.load()
     for name, sql in wanted(cfg).items():
         if name in EMPTY_UNTIL and not spark.catalog.tableExists(f"{cat}.{EMPTY_UNTIL[name][0]}"):
             sql = EMPTY_UNTIL[name][1]
-        spark.sql(f"CREATE OR REPLACE VIEW {cat}.gold.{name} AS {sql.format(cat=cat)}")
+        about = dictionary.view_comment(name, words)
+        note = f" COMMENT '{about}'" if about else ""
+        spark.sql(f"CREATE OR REPLACE VIEW {cat}.gold.{name}{note} AS {sql.format(cat=cat)}")
         out[name] = spark.table(f"{cat}.gold.{name}").count()
     return out

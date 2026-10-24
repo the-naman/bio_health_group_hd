@@ -10,10 +10,12 @@ Alerts (every two hours; all new findings in one mail; each finding sent once vi
   backlog      BHG: FQF days waiting too long to be merged into the group figures
   over_limit   BHG: the number of people owing the group more than the policy limit changed
   velocity     FQF (5.14): a customer had too many failed payments in one 10-minute window (gold.payment_failure_windows)
+  stream       FQF (stream health): the payment stream stopped finishing runs, receives no events from Kafka, or
+               drops an unusual share of messages (ops.audit_runs rows stream.<layer>; rules config/alerts.yml)
 Not repeated: a failed task (Databricks mails the fixers) and "figures delayed" (ci/notices.py).
 
 Digest (Monday 09:15 IST): runs and failures of the week, freshness, quarantine, new columns, merge and group
-numbers (BHG), alerts and notices sent. Once per ISO week.
+numbers (BHG), payment stream runs and events (FQF), alerts and notices sent. Once per ISO week.
 
 Dev activity (daily 20:45 IST, requirement 10: Developer <-> Team Lead): every run of the per-person dev jobs
 lh_<code>_dev_daily_<role> in the last 24 hours, with result, duration and failed tasks; no runs = no mail. Read from
@@ -25,9 +27,17 @@ the Jobs API only (lh_ci has Can View on the dev jobs), no data. Roles: config/a
     python ci/alerts.py --env dev --dev-activity [--dry-run]
     --scheduled                                         # used by the schedule: quiet until config live: true
 """
-import argparse, os, smtplib, ssl, sys, time
-from datetime import datetime, timedelta, timezone
+
+import argparse
+import os
+import smtplib
+import ssl
+import sys
+import time
+from datetime import datetime, timedelta, timezone, UTC
 from email.message import EmailMessage
+from pathlib import Path
+
 import yaml
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem, StatementState
@@ -41,15 +51,15 @@ p.add_argument("--sample", action="store_true")
 p.add_argument("--scheduled", action="store_true")
 a = p.parse_args()
 
-company = yaml.safe_load(open("config/company.yml"))
+company = yaml.safe_load(Path("config/company.yml").read_text())
 code, name = company["code"], company["name"]
-acfg = yaml.safe_load(open("config/alerts.yml"))
+acfg = yaml.safe_load(Path("config/alerts.yml").read_text())
 if (a.env == "dev") != a.dev_activity:
     sys.exit("--dev-activity goes with --env dev, and --env dev only with --dev-activity")
 if a.scheduled and not acfg["live"].get(a.env):
     print(f"{a.env}: not live yet (config/alerts.yml live), nothing to do")
     sys.exit(0)
-roles = (acfg["dev_activity_roles"] if a.dev_activity else acfg["digest_roles" if a.digest else "roles"][a.env])
+roles = acfg["dev_activity_roles"] if a.dev_activity else acfg["digest_roles" if a.digest else "roles"][a.env]
 cat = f"{code}_{a.env}"
 IST = timezone(timedelta(hours=5, minutes=30))
 now = datetime.now(IST)
@@ -85,29 +95,47 @@ if a.dev_activity:
     prefix = f"lh_{code}_dev_daily_"
     since = (time.time() - 24 * 3600) * 1000
     lines, n_ok, n_bad = [], 0, 0
-    for job in sorted((j for j in w.jobs.list() if (j.settings and j.settings.name or "").startswith(prefix)),
-                      key=lambda j: j.settings.name):
-        owner = job.settings.name[len(prefix):]
+    for job in sorted(
+        (j for j in w.jobs.list() if (j.settings and j.settings.name or "").startswith(prefix)),
+        key=lambda j: j.settings.name,
+    ):
+        owner = job.settings.name[len(prefix) :]
         for r in w.jobs.list_runs(job_id=job.job_id, start_time_from=int(since), expand_tasks=True):
             st = r.state
-            res = (st.result_state.value if st and st.result_state else (st.life_cycle_state.value if st and st.life_cycle_state else "?"))
+            res = (
+                st.result_state.value
+                if st and st.result_state
+                else (st.life_cycle_state.value if st and st.life_cycle_state else "?")
+            )
             mins = f"{(r.end_time - r.start_time) / 60000:.0f} min" if r.end_time and r.start_time else "running"
-            bad = sorted({t.task_key for t in (r.tasks or []) if t.state and t.state.result_state
-                          and t.state.result_state.value not in ("SUCCESS", "EXCLUDED")})
+            bad = sorted(
+                {
+                    t.task_key
+                    for t in (r.tasks or [])
+                    if t.state and t.state.result_state and t.state.result_state.value not in ("SUCCESS", "EXCLUDED")
+                }
+            )
             ok = res == "SUCCESS"
             n_ok, n_bad = n_ok + ok, n_bad + (not ok)
             when = datetime.fromtimestamp(r.start_time / 1000, IST).strftime("%d %b %H:%M IST")
-            lines.append(f"  {owner:10} {when}  {res:10} {mins:>9}" + (f"  tasks not ok: {', '.join(bad)}" if bad else ""))
+            lines.append(
+                f"  {owner:10} {when}  {res:10} {mins:>9}" + (f"  tasks not ok: {', '.join(bad)}" if bad else "")
+            )
     print(f"dev activity: {len(lines)} run(s) in the last 24 h")
     if not lines:
         print("dev activity: nothing to send")
         sys.exit(0)
-    mail(f"Dev activity: {len(lines)} run(s), {n_bad} not successful",
-         f"Dev job runs of {name} in the last 24 hours (each person's own dev job, newest data in their own Git folder):\n\n"
-         + "\n".join(lines) + "\n\nDetails: Jobs & Pipelines -> lh_" + code + "_dev_daily_<role> -> the run.")
+    mail(
+        f"Dev activity: {len(lines)} run(s), {n_bad} not successful",
+        f"Dev job runs of {name} in the last 24 hours (each person's own dev job, newest data in their own Git folder):\n\n"
+        + "\n".join(lines)
+        + "\n\nDetails: Jobs & Pipelines -> lh_"
+        + code
+        + "_dev_daily_<role> -> the run.",
+    )
     sys.exit(0)
 
-wh_name = yaml.safe_load(open("config/bi.yml"))["warehouse"]
+wh_name = yaml.safe_load(Path("config/bi.yml").read_text())["warehouse"]
 wh = [x.id for x in w.warehouses.list() if x.name == wh_name]
 if len(wh) != 1:
     sys.exit(f"warehouse '{wh_name}' not found once")
@@ -116,8 +144,9 @@ if len(wh) != 1:
 def sql(statement, **params):
     """Rows (lists of strings) of one SQL statement on the warehouse; params are passed as values, never pasted."""
     items = [StatementParameterListItem(name=k, value=str(v)) for k, v in params.items()]
-    r = w.statement_execution.execute_statement(statement=statement, warehouse_id=wh[0], catalog=cat,
-                                                parameters=items or None, wait_timeout="50s")
+    r = w.statement_execution.execute_statement(
+        statement=statement, warehouse_id=wh[0], catalog=cat, parameters=items or None, wait_timeout="50s"
+    )
     while r.status.state in (StatementState.PENDING, StatementState.RUNNING):
         time.sleep(3)
         r = w.statement_execution.get_statement(r.statement_id)
@@ -132,7 +161,7 @@ def exists(schema, table):
 
 def ist(ts):
     """'2026-10-22 04:23:21.5' (UTC, as Spark prints it) -> '22 Oct 2026 09:53 IST'."""
-    t = datetime.strptime(ts.replace("T", " ")[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    t = datetime.strptime(ts.replace("T", " ")[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     return t.astimezone(IST).strftime("%d %b %Y %H:%M IST")
 
 
@@ -161,8 +190,12 @@ def send(subject, body, records):
         s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
         s.send_message(msg)
     for notice, ref in records:
-        sql("INSERT INTO ops.notice_log VALUES (:n, :r, current_timestamp(), :roles)", n=notice, r=ref,
-            roles=",".join(roles))
+        sql(
+            "INSERT INTO ops.notice_log VALUES (:n, :r, current_timestamp(), :roles)",
+            n=notice,
+            r=ref,
+            roles=",".join(roles),
+        )
     print(f"mail sent to {', '.join(roles)}, {len(records)} item(s) recorded")
 
 
@@ -170,32 +203,45 @@ sql("""CREATE TABLE IF NOT EXISTS ops.notice_log (notice STRING, ref STRING, sen
        COMMENT '10e/5.12: notices and alerts already sent (ci/notices.py, ci/alerts.py); never resent'""")
 days = int(acfg.get("lookback_days", 3))
 has_audit = exists("ops", "audit_runs")
+scfg = yaml.safe_load(Path("config/stream.yml").read_text())
+has_stream = code in scfg.get("companies", []) and has_audit
 
 
 # ---------------------------------------------------------------- weekly digest
 if a.digest:
     y, wk, _ = now.isocalendar()
     ref = f"{y}-W{wk:02d}"
-    if not a.sample and not a.dry_run and sql("SELECT 1 FROM ops.notice_log WHERE notice = 'digest' AND ref = :r", r=ref):
+    if (
+        not a.sample
+        and not a.dry_run
+        and sql("SELECT 1 FROM ops.notice_log WHERE notice = 'digest' AND ref = :r", r=ref)
+    ):
         print(f"digest {ref} already sent")
         sys.exit(0)
     out = [f"Weekly data report for {name} ({a.env}), week {ref}, as of {now.strftime('%d %b %Y %H:%M IST')}.", ""]
     if exists("gold", "v_health_runs"):
-        runs = sql("SELECT job, last_status, CAST(last_run AS STRING), runs_7d, failures_7d FROM gold.v_health_runs "
-                   "ORDER BY failures_7d DESC, job")
+        runs = sql(
+            "SELECT job, last_status, CAST(last_run AS STRING), runs_7d, failures_7d FROM gold.v_health_runs "
+            "ORDER BY failures_7d DESC, job"
+        )
         total, bad = sum(num(r[3]) for r in runs), sum(num(r[4]) for r in runs)
         out.append(f"Runs in the last 7 days: {total} steps, {bad} not successful (rejected files count here too).")
-        out += [f"  {j:28} {f'{num(n)} not ok':>10}   last: {s} {ist(t) if t else ''}"
-                for j, s, t, _, n in runs if num(n)]
+        out += [
+            f"  {j:28} {f'{num(n)} not ok':>10}   last: {s} {ist(t) if t else ''}" for j, s, t, _, n in runs if num(n)
+        ]
     if exists("gold", "v_health_freshness"):
         f = sql("SELECT fact, CAST(data_to AS STRING), days_behind FROM gold.v_health_freshness")
         if f:
             out.append(f"Freshness: {f[0][0]} reaches {f[0][1]} ({f[0][2]} days behind today).")
     if exists("gold", "v_health_quarantine"):
-        q = sql("SELECT table_name, sum(rows) FROM gold.v_health_quarantine WHERE status = 'open' "
-                "GROUP BY table_name ORDER BY 2 DESC")
-        out.append(f"Quarantine, rows still open: {sum(num(r[1]) for r in q)}"
-                   + (" (" + ", ".join(f"{t} {num(n)}" for t, n in q[:6]) + ")" if q else ""))
+        q = sql(
+            "SELECT table_name, sum(rows) FROM gold.v_health_quarantine WHERE status = 'open' "
+            "GROUP BY table_name ORDER BY 2 DESC"
+        )
+        out.append(
+            f"Quarantine, rows still open: {sum(num(r[1]) for r in q)}"
+            + (" (" + ", ".join(f"{t} {num(n)}" for t, n in q[:6]) + ")" if q else "")
+        )
     if exists("gold", "v_health_quarantine_daily"):
         n = sql("SELECT sum(rows) FROM gold.v_health_quarantine_daily WHERE day > date_sub(current_date(), 7)")
         out.append(f"New quarantine rows this week: {num(n[0][0]) if n else 0}")
@@ -203,23 +249,44 @@ if a.digest:
         r = sql("SELECT table_name, key FROM gold.v_health_rescued WHERE NOT planned ORDER BY 1, 2")
         out.append("New source columns not planned yet: " + (", ".join(f"{t}.{k}" for t, k in r) if r else "none"))
     if code == "bhg" and exists("gold", "v_health_merge"):
-        m = sql("SELECT status, backlog_days, CAST(fqf_data_to AS STRING) FROM gold.v_health_merge "
-                "WHERE env = :e ORDER BY run_ts DESC LIMIT 1", e=a.env)
+        m = sql(
+            "SELECT status, backlog_days, CAST(fqf_data_to AS STRING) FROM gold.v_health_merge "
+            "WHERE env = :e ORDER BY run_ts DESC LIMIT 1",
+            e=a.env,
+        )
         if m:
             out.append(f"Group merge: {m[0][0]}, FQF data to {m[0][2]}, days waiting {m[0][1]}.")
-        k = dict(sql("SELECT kpi, CAST(value AS STRING) FROM gold.v_group_kpi")) if exists("gold", "v_group_kpi") else {}
+        k = (
+            dict(sql("SELECT kpi, CAST(value AS STRING) FROM gold.v_group_kpi"))
+            if exists("gold", "v_group_kpi")
+            else {}
+        )
         if k:
-            out.append("Group: " + ", ".join(f"{x.replace('_', ' ')} {num(k.get(x))}" for x in
-                       ("people", "people_shared", "people_over_limit", "reviews_open", "intercompany_breaks")))
-    s = sql("SELECT notice, count(*) FROM ops.notice_log WHERE sent_at >= current_timestamp() - INTERVAL 7 DAYS "
-            "AND notice <> 'digest' GROUP BY notice ORDER BY notice")
+            out.append(
+                "Group: "
+                + ", ".join(
+                    f"{x.replace('_', ' ')} {num(k.get(x))}"
+                    for x in ("people", "people_shared", "people_over_limit", "reviews_open", "intercompany_breaks")
+                )
+            )
+    if has_stream:
+        r = sql("""SELECT sum(CASE WHEN job = 'stream.gold' THEN 1 ELSE 0 END),
+                         sum(CASE WHEN job = 'stream.bronze' THEN rows ELSE 0 END),
+                         sum(CASE WHEN job = 'stream.silver' THEN rows ELSE 0 END)
+                  FROM ops.audit_runs WHERE job LIKE 'stream.%' AND status = 'success'
+                  AND run_ts >= current_timestamp() - INTERVAL 7 DAYS""")[0]
+        out.append(f"Payment stream: {num(r[0])} runs, {num(r[1])} Kafka messages, {num(r[2])} payment events kept.")
+    s = sql(
+        "SELECT notice, count(*) FROM ops.notice_log WHERE sent_at >= current_timestamp() - INTERVAL 7 DAYS "
+        "AND notice <> 'digest' GROUP BY notice ORDER BY notice"
+    )
     out.append("Mails sent this week: " + (", ".join(f"{n} {c}" for n, c in s) if s else "none"))
     send(f"Weekly data report ({ref})", "\n".join(out), [("digest", ref)])
     sys.exit(0)
 
 
 # ---------------------------------------------------------------- alerts
-found = []                                       # (kind, ref, text)
+found = []  # (kind, ref, text)
 if has_audit:
     for job, ts, msg in sql(f"""SELECT job, CAST(run_ts AS STRING), message FROM ops.audit_runs
                                 WHERE status = 'rejected' AND run_ts >= current_timestamp() - INTERVAL {days} DAYS
@@ -228,13 +295,17 @@ if has_audit:
     for ts, status, msg in sql(f"""SELECT CAST(run_ts AS STRING), status, message FROM ops.audit_runs
                                    WHERE job = 'silver_rebuild' AND run_ts >= current_timestamp() - INTERVAL {days} DAYS
                                    ORDER BY run_ts"""):
-        found.append(("rebuild", ts, f"Silver failed its checkpoint and was rebuilt from Bronze at {ist(ts)} "
-                                     f"({status}): {msg}"))
+        found.append(
+            ("rebuild", ts, f"Silver failed its checkpoint and was rebuilt from Bronze at {ist(ts)} ({status}): {msg}")
+        )
 
 if exists("gold", "v_health_quarantine_daily"):
     qs = acfg["quarantine_spike"]
-    per_day = {d: num(n) for d, n in sql("""SELECT CAST(day AS STRING), sum(rows) FROM gold.v_health_quarantine_daily
-                                            WHERE day >= date_sub(current_date(), 8) GROUP BY day""")}
+    per_day = {
+        d: num(n)
+        for d, n in sql("""SELECT CAST(day AS STRING), sum(rows) FROM gold.v_health_quarantine_daily
+                                            WHERE day >= date_sub(current_date(), 8) GROUP BY day""")
+    }
     if per_day:
         last = max(per_day)
         ld = datetime.strptime(last, "%Y-%m-%d").date()
@@ -243,24 +314,48 @@ if exists("gold", "v_health_quarantine_daily"):
         n = per_day[last]
         print(f"quarantine: {n} new rows on {last}, daily average before {avg:.1f}")
         if n >= qs["min_rows"] and n >= qs["factor"] * avg and (now.date() - ld).days <= 1:
-            detail = sql("""SELECT table_name, rule, sum(rows) FROM gold.v_health_quarantine_daily WHERE day = :d
-                            GROUP BY ALL ORDER BY 3 DESC LIMIT 8""", d=last)
-            found.append(("quarantine", last, f"{n} new quarantine rows on {last} (daily average before: {avg:.1f}): "
-                          + ", ".join(f"{t}/{r} {num(c)}" for t, r, c in detail)))
+            detail = sql(
+                """SELECT table_name, rule, sum(rows) FROM gold.v_health_quarantine_daily WHERE day = :d
+                            GROUP BY ALL ORDER BY 3 DESC LIMIT 8""",
+                d=last,
+            )
+            found.append(
+                (
+                    "quarantine",
+                    last,
+                    f"{n} new quarantine rows on {last} (daily average before: {avg:.1f}): "
+                    + ", ".join(f"{t}/{r} {num(c)}" for t, r, c in detail),
+                )
+            )
 
 if exists("gold", "v_health_rescued"):
     for t, k, n, ts in sql("""SELECT table_name, key, CAST(rows AS STRING), CAST(first_seen AS STRING)
                               FROM gold.v_health_rescued WHERE NOT planned ORDER BY 1, 2"""):
-        found.append(("rescued", f"{t}.{k}", f"{t}: the source sends a new column '{k}' ({num(n)} Bronze rows since "
-                      f"{ist(ts) if ts else '-'}). It waits in _rescued_data; to use it add it to from_rescued in "
-                      "config/silver.yml through a reviewed PR."))
+        found.append(
+            (
+                "rescued",
+                f"{t}.{k}",
+                f"{t}: the source sends a new column '{k}' ({num(n)} Bronze rows since "
+                f"{ist(ts) if ts else '-'}). It waits in _rescued_data; to use it add it to from_rescued in "
+                "config/silver.yml through a reviewed PR.",
+            )
+        )
 
 if code == "bhg" and exists("gold", "v_health_merge"):
-    m = sql("""SELECT backlog_days, status, CAST(fqf_data_to AS STRING) FROM gold.v_health_merge
-               WHERE env = :e ORDER BY run_ts DESC LIMIT 1""", e=a.env)
+    m = sql(
+        """SELECT backlog_days, status, CAST(fqf_data_to AS STRING) FROM gold.v_health_merge
+               WHERE env = :e ORDER BY run_ts DESC LIMIT 1""",
+        e=a.env,
+    )
     if m and num(m[0][0]) >= int(acfg["merge_backlog_days"]):
-        found.append(("backlog", today, f"Group merge {m[0][1]}: {num(m[0][0])} FQF business days are still waiting "
-                      f"(FQF data reaches {m[0][2]}). Check lh_fqf_{a.env}_daily."))
+        found.append(
+            (
+                "backlog",
+                today,
+                f"Group merge {m[0][1]}: {num(m[0][0])} FQF business days are still waiting "
+                f"(FQF data reaches {m[0][2]}). Check lh_fqf_{a.env}_daily.",
+            )
+        )
 
 if code == "bhg" and exists("gold", "v_group_kpi"):
     v = sql("SELECT CAST(value AS STRING) FROM gold.v_group_kpi WHERE kpi = 'people_over_limit'")
@@ -269,16 +364,79 @@ if code == "bhg" and exists("gold", "v_group_kpi"):
         prev = sql("SELECT ref FROM ops.notice_log WHERE notice = 'alert_over_limit' ORDER BY sent_at DESC LIMIT 1")
         p_n = int(prev[0][0].split("@")[0]) if prev else 0
         if n != p_n or a.sample:
-            found.append(("over_limit", f"{n}@{today}", f"People owing the group more than the policy limit: {n} "
-                          f"(was {p_n}). Details: dashboard group_overview_{a.env}, view v_group_exposure."))
+            found.append(
+                (
+                    "over_limit",
+                    f"{n}@{today}",
+                    f"People owing the group more than the policy limit: {n} "
+                    f"(was {p_n}). Details: dashboard group_overview_{a.env}, view v_group_exposure.",
+                )
+            )
 
 if exists("gold", "payment_failure_windows"):
     for ws, cust, n, amt in sql(f"""SELECT CAST(window_start AS STRING), customer_ref, CAST(failed_payments AS STRING),
                                           CAST(failed_amount AS STRING) FROM gold.payment_failure_windows
                                    WHERE is_alert AND window_start >= current_timestamp() - INTERVAL {days} DAYS
                                    ORDER BY window_start"""):
-        found.append(("velocity", f"{ws}|{cust}", f"{cust}: {num(n)} failed payments ({float(amt or 0):,.2f} INR) in the "
-                      f"10 minutes from {ist(ws)}. Check the customer's payment method before the next instalment."))
+        found.append(
+            (
+                "velocity",
+                f"{ws}|{cust}",
+                f"{cust}: {num(n)} failed payments ({float(amt or 0):,.2f} INR) in the "
+                f"10 minutes from {ist(ws)}. Check the customer's payment method before the next instalment.",
+            )
+        )
+
+sh = acfg.get("stream_health", {})
+if has_stream and a.env in sh.get("max_hours_since_run", {}):
+    # Silent stream problems only. A failed stream task is mailed to the fixers by Databricks (config/jobs.yml notify).
+    last = sql("""SELECT CAST(max(run_ts) AS STRING),
+                           (unix_timestamp(current_timestamp()) - unix_timestamp(max(run_ts))) / 3600
+                    FROM ops.audit_runs WHERE job = 'stream.gold' AND status = 'success'""")
+    first_h, end_h = sh["active_hours_ist"][a.env]
+    if last and last[0][0] and first_h <= now.hour < end_h:
+        hours, limit = float(last[0][1]), float(sh["max_hours_since_run"][a.env])
+        print(f"stream: last finished run {hours:.1f} h ago (limit {limit:g} h)")
+        if hours > limit:
+            found.append(
+                (
+                    "stream",
+                    f"stale|{last[0][0]}",
+                    f"The payment stream has not finished a run for {hours:.1f} hours (last good run "
+                    f"{ist(last[0][0])}). Check lh_{code}_{a.env}_stream: paused schedule, failing task or Kafka login.",
+                )
+            )
+    if scfg.get("producer", {}).get("live", {}).get(a.env):
+        hours = int(sh["empty_hours"][a.env])
+        runs, rows = sql(f"""SELECT count(*), coalesce(sum(rows), 0) FROM ops.audit_runs
+                              WHERE job = 'stream.bronze' AND status = 'success'
+                              AND run_ts >= current_timestamp() - INTERVAL {hours} HOURS""")[0]
+        if num(runs) >= 2 and num(rows) == 0:
+            found.append(
+                (
+                    "stream",
+                    f"empty|{today}",
+                    f"The payment stream ran {num(runs)} times in the last {hours} hours but received no events from "
+                    "Kafka. Check the producer (GitHub Actions workflow stream) and the topic on the Kafka service.",
+                )
+            )
+    kafka, kept = sql("""SELECT coalesce(sum(CASE WHEN job = 'stream.bronze' THEN rows END), 0),
+                                 coalesce(sum(CASE WHEN job = 'stream.silver' THEN rows END), 0)
+                          FROM ops.audit_runs WHERE job IN ('stream.bronze', 'stream.silver') AND status = 'success'
+                          AND run_ts >= current_timestamp() - INTERVAL 24 HOURS""")[0]
+    kafka, kept = num(kafka), num(kept)
+    if kafka >= int(sh["min_events"]) and kept < kafka:
+        pct = 100 * (kafka - kept) / kafka
+        print(f"stream: {kafka} Kafka messages, {kept} kept in 24 h ({pct:.1f}% left out)")
+        if pct > float(sh["max_dropped_pct"]):
+            found.append(
+                (
+                    "stream",
+                    f"dropped|{today}",
+                    f"The payment stream left out {pct:.1f}% of {kafka} Kafka messages in 24 hours (broken, duplicate "
+                    f"or late; normal is below {sh['max_dropped_pct']}%). Check the producer and silver.payment_events.",
+                )
+            )
 
 if not a.sample:
     done = {(x, y) for x, y in sql("SELECT notice, ref FROM ops.notice_log WHERE notice LIKE 'alert_%'")}
@@ -286,14 +444,24 @@ if not a.sample:
 if not found:
     print("alerts: nothing new to send")
     sys.exit(0)
-titles = {"rejected": "Files refused by Bronze", "rebuild": "Silver rebuilt from Bronze",
-          "quarantine": "Quarantine spike", "rescued": "New source columns", "backlog": "Group merge waiting",
-          "over_limit": "Over-limit customers", "velocity": "Failed-payment velocity"}
+titles = {
+    "rejected": "Files refused by Bronze",
+    "rebuild": "Silver rebuilt from Bronze",
+    "quarantine": "Quarantine spike",
+    "rescued": "New source columns",
+    "backlog": "Group merge waiting",
+    "over_limit": "Over-limit customers",
+    "velocity": "Failed-payment velocity",
+    "stream": "Payment stream health",
+}
 body = []
 for kind in titles:
     items = [t for k, _, t in found if k == kind]
     if items:
         body += [f"{titles[kind]}:"] + [f"  - {t}" for t in items] + [""]
 kinds = sorted({k for k, _, _ in found}, key=list(titles).index)
-send(f"Data alert: {', '.join(titles[k].lower() for k in kinds)}", "\n".join(body).rstrip(),
-     [(f"alert_{k}", r) for k, r, _ in found])
+send(
+    f"Data alert: {', '.join(titles[k].lower() for k in kinds)}",
+    "\n".join(body).rstrip(),
+    [(f"alert_{k}", r) for k, r, _ in found],
+)

@@ -13,6 +13,7 @@ People are picked by a keyed hash of their national id, so the same person is pi
 ids are re-keyed with one shared key, so links between the two companies (bhg_invoice_id) still match.
 Amounts are kept. The key comes from the secret scope lh_refresh (loaded by the refresh workflow), never Git.
 """
+
 import json
 import os
 
@@ -34,8 +35,11 @@ def _yaml(name):
 def load():
     """(refresh settings, {table: (parents, key)} from silver.yml, id columns from privacy.yml)."""
     s = _yaml("silver.yml")["tables"]
-    return _yaml("refresh.yml"), {t: (v.get("parents") or {}, v["key"]) for t, v in s.items()}, \
-        _yaml("privacy.yml")["ids"]["columns"]
+    return (
+        _yaml("refresh.yml"),
+        {t: (v.get("parents") or {}, v["key"]) for t, v in s.items()},
+        _yaml("privacy.yml")["ids"]["columns"],
+    )
 
 
 def flow(rcfg, target):
@@ -52,14 +56,17 @@ def _h(key, kind, col):
 
 def _num(key, kind, col, n):
     """n digits taken from a keyed hash of col."""
-    return F.lpad((F.conv(F.substring(_h(key, kind, col), 1, 15), 16, 10).cast("long") % (10 ** n)).cast("string"), n, "0")
+    return F.lpad(
+        (F.conv(F.substring(_h(key, kind, col), 1, 15), 16, 10).cast("long") % (10**n)).cast("string"), n, "0"
+    )
 
 
 def token(key, col):
     """Same input + same key -> same new id (letters prefix kept, then R + 10 hex), so joins still work."""
     v = col.cast("string")
     return F.when(v.isNull(), F.lit(None).cast("string")).otherwise(
-        F.concat(F.regexp_extract(v, r"^[A-Za-z_]*", 0), F.lit("R"), F.upper(F.substring(_h(key, "id", v), 1, 10))))
+        F.concat(F.regexp_extract(v, r"^[A-Za-z_]*", 0), F.lit("R"), F.upper(F.substring(_h(key, "id", v), 1, 10)))
+    )
 
 
 def fake(key, kind, col, dtype):
@@ -67,14 +74,14 @@ def fake(key, kind, col, dtype):
     digits = F.regexp_replace(col.cast("string"), r"\D", "")
     if kind == "name":
         out = F.concat(F.lit("Person "), F.upper(F.substring(_h(key, "name", col), 1, 6)))
-    elif kind == "aadhaar":                                # starts with 0: never a real Aadhaar
+    elif kind == "aadhaar":  # starts with 0: never a real Aadhaar
         out = F.concat(F.lit("0"), _num(key, "aadhaar", digits, 11))
-    elif kind == "phone":                                  # starts with 0: never a real mobile number
+    elif kind == "phone":  # starts with 0: never a real mobile number
         out = F.concat(F.lit("0"), _num(key, "phone", F.substring(digits, -10, 10), 9))
-    elif kind == "date":                                   # moved by up to +-6 months
+    elif kind == "date":  # moved by up to +-6 months
         shift = (F.conv(F.substring(_h(key, "date", col), 1, 6), 16, 10).cast("int") % 365) - 182
         out = F.date_add(col.cast("date"), shift)
-    elif kind == "round":                                  # nearest 5,000
+    elif kind == "round":  # nearest 5,000
         out = F.round(col.cast("double") / 5000) * 5000
     elif kind == "token":
         out = token(key, col)
@@ -111,7 +118,7 @@ def transform(df, table, key, rcfg, ids):
     fakes = (rcfg.get("fake") or {}).get(table, {})
     cols = []
     for c, dtype in df.dtypes:
-        if c in TECHNICAL or c == "id_fingerprint":       # fingerprint is remade in the target with its own key
+        if c in TECHNICAL or c == "id_fingerprint":  # fingerprint is remade in the target with its own key
             cols.append(F.lit(None).cast(dtype).alias(c))
         elif c in fakes:
             cols.append(fake(key, fakes[c], F.col(c), dtype).alias(c))
@@ -134,8 +141,25 @@ def out(spark, source_catalog, dest, key, pct, rcfg, parents, ids, read=None):
         df = read(t)
         if t == pt:
             per = df.groupBy(pkey).agg(F.max(F.regexp_replace(F.col(by).cast("string"), r"\D", "")).alias("_by"))
-            pick = per.select(pkey, (F.conv(F.substring(_h(key, "sample", F.coalesce(F.when(F.col("_by") != "", F.col("_by")),
-                                       F.col(pkey).cast("string"))), 1, 8), 16, 10).cast("long") % 100).alias("_b"))
+            pick = per.select(
+                pkey,
+                (
+                    F.conv(
+                        F.substring(
+                            _h(
+                                key,
+                                "sample",
+                                F.coalesce(F.when(F.col("_by") != "", F.col("_by")), F.col(pkey).cast("string")),
+                            ),
+                            1,
+                            8,
+                        ),
+                        16,
+                        10,
+                    ).cast("long")
+                    % 100
+                ).alias("_b"),
+            )
             df = df.join(pick.filter(F.col("_b") < pct).select(pkey), pkey, "left_semi")
         elif t in mine:
             links = [(c, pt_) for c, pt_ in p.items() if pt_ in mine]
@@ -145,7 +169,11 @@ def out(spark, source_catalog, dest, key, pct, rcfg, parents, ids, read=None):
                 kept = spark.read.parquet(f"{dest}/{parent}").select(F.col(pk).alias(f"_k{i}")).distinct()
                 df = df.join(kept, token(key, F.col(c)) == F.col(f"_k{i}"), "left")
                 ok.append(F.col(c).isNull() | F.col(f"_k{i}").isNotNull())
-            any_link = F.greatest(*[F.col(c).isNotNull() for c, _ in links]) if len(links) > 1 else F.col(links[0][0]).isNotNull()
+            any_link = (
+                F.greatest(*[F.col(c).isNotNull() for c, _ in links])
+                if len(links) > 1
+                else F.col(links[0][0]).isNotNull()
+            )
             cond = any_link
             for o in ok:
                 cond = cond & o

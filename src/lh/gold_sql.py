@@ -7,6 +7,7 @@ written so a manager or analyst can read it. This module only runs those files, 
     read (for example _bhg_events); it is never saved
   - every other file is saved as <catalog>.gold.<table> by gold.save (full rebuild; masks and row filters stay)
 Same file in both repos."""
+
 import os
 import re
 
@@ -60,18 +61,25 @@ def company(spark, cfg):
     g = gold.load_gold()
     spark.udf.register("contact_fingerprint", gold.contact_fingerprint_udf(cfg["catalog"]))
     d = g["dim_date"]
-    params = {"start_date": str(d["start"]), "end_date": str(d["end"]),
-              "fiscal_start_month": int(d["fiscal_year_start_month"])}
+    params = {
+        "start_date": str(d["start"]),
+        "end_date": str(d["end"]),
+        "fiscal_start_month": int(d["fiscal_year_start_month"]),
+    }
     return run(spark, cfg, g["sql_build"][cfg["code"]], params)
 
 
 def group_tables(spark, cfg, env):
     """The group Gold of the parent (config/group.yml, sql_build). Reads the FQF Gold of the same environment."""
     from lh import group
+
     grp, src = group.load_group(), group.source(cfg, env)
-    group.decisions(spark, cfg["catalog"])                    # review decisions table + Manager grant (rerun-safe)
+    group.decisions(spark, cfg["catalog"])  # review decisions table + Manager grant (rerun-safe)
     rows = [(c["code"], c["name"], c["role"], c["industry"]) for c in grp["companies"]]
-    (spark.createDataFrame(rows, "company_code string, company_name string, role string, industry string")
-          .createOrReplaceTempView("_cfg_companies"))
+    (
+        spark.createDataFrame(
+            rows, "company_code string, company_name string, role string, industry string"
+        ).createOrReplaceTempView("_cfg_companies")
+    )
     params = {"fqf_catalog": src, "ic_payer_type": grp["intercompany"]["bhg_payer_type"]}
     return run(spark, cfg, grp["sql_build"], params)

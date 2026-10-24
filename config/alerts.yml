@@ -16,3 +16,9 @@ quarantine_spike:                         # new quarantine rows on the latest da
   min_rows: 20                            # fewer new rows than this is never a spike
   factor: 3                               # spike = at least factor x the daily average of the 7 days before
 merge_backlog_days: 2                     # BHG: FQF business days still waiting to be merged into the group
+stream_health:                            # FQF payment stream: silent problems only (a failed task is mailed by Databricks)
+  max_hours_since_run: {test: 13, prod: 3}  # no finished stream run for longer = alert, once per stale period
+  active_hours_ist: {test: [0, 24], prod: [8, 23]}  # prod: judged only while the stream is scheduled (07:30-21:30)
+  empty_hours: {test: 13, prod: 5}        # 2+ runs in this window with 0 Kafka events = alert, once a day
+  max_dropped_pct: 10                     # Silver left out more than this % of the Kafka messages of 24 h = alert
+  min_events: 100                         # fewer Kafka messages than this in 24 h: the share is not judged

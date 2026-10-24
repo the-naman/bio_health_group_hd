@@ -10,7 +10,11 @@ The files in the repo point at the dev catalogs. For each environment:
      and row filters apply to the person looking at it
   4. permissions are set exactly: managers CAN_MANAGE, viewer groups CAN_RUN (open and refresh)
 Settings in config/bi.yml. plan mode changes nothing. Uses only the Databricks REST API of the caller."""
-import glob, json, os, re
+
+import glob
+import json
+import os
+import re
 import yaml
 
 # the underscore may be markdown-escaped in text widgets: bhg\\_dev in the file (bhg\_dev on screen)
@@ -38,18 +42,20 @@ def dashboards(root, env):
         name = os.path.basename(path)[: -len(".lvdash.json")]
         with open(path) as f:
             text = for_env(f.read(), env)
-        json.loads(text)                                   # must still be valid JSON
+        json.loads(text)  # must still be valid JSON
         out.append((name, text))
     return out
 
 
 def acl(bi, env):
-    return ([{"group_name": g, "permission_level": "CAN_MANAGE"} for g in bi["managers"]]
-            + [{"group_name": g, "permission_level": "CAN_RUN"} for g in bi["viewers"][env]])
+    return [{"group_name": g, "permission_level": "CAN_MANAGE"} for g in bi["managers"]] + [
+        {"group_name": g, "permission_level": "CAN_RUN"} for g in bi["viewers"][env]
+    ]
 
 
 class Api:
     """Thin wrapper over the workspace REST API of whoever runs the notebook (or the job account)."""
+
     def __init__(self, w):
         self.w = w
 
@@ -66,7 +72,7 @@ class Api:
         """Dashboard id at this workspace path, or None."""
         try:
             st = self.call("GET", "/api/2.0/workspace/get-status", query={"path": path})
-        except Exception as e:                              # not there yet -> None; any other error stops the run
+        except Exception as e:  # not there yet -> None; any other error stops the run
             if type(e).__name__ in ("ResourceDoesNotExist", "NotFound") or "RESOURCE_DOES_NOT_EXIST" in str(e):
                 return None
             raise
@@ -88,8 +94,11 @@ class Api:
         self.call("PATCH", f"/api/2.0/lakeview/dashboards/{did}", body=body)
 
     def publish(self, did, wh):
-        self.call("POST", f"/api/2.0/lakeview/dashboards/{did}/published",
-                  body={"embed_credentials": False, "warehouse_id": wh})
+        self.call(
+            "POST",
+            f"/api/2.0/lakeview/dashboards/{did}/published",
+            body={"embed_credentials": False, "warehouse_id": wh},
+        )
 
     def set_acl(self, did, entries):
         self.call("PUT", f"/api/2.0/permissions/dashboards/{did}", body={"access_control_list": entries})
@@ -124,8 +133,13 @@ def run(api, bi, root, env, apply=False):
                 did = api.create(title, parent, text, wh)
             api.publish(did, wh)
             api.set_acl(did, entries)
-        rows.append({"dashboard": title, "action": action, "id": did, "path": f"{bi['folder']}/{env}",
-                     "viewers": ", ".join(e["group_name"] for e in entries if e["permission_level"] == "CAN_RUN")})
+        rows.append(
+            {
+                "dashboard": title,
+                "action": action,
+                "id": did,
+                "path": f"{bi['folder']}/{env}",
+                "viewers": ", ".join(e["group_name"] for e in entries if e["permission_level"] == "CAN_RUN"),
+            }
+        )
     return rows
-
-

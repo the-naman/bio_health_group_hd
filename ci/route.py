@@ -6,7 +6,12 @@ Hotfix (10j, config/ci.yml "hotfix"): a branch <code>_hotfix_<name> may go to te
   - for prod: it is already merged into <code>_test (the fix was tested and approved there first).
 Needs the full history (actions/checkout fetch-depth: 0). Env: BASE, HEAD (branch names), HEAD_SHA, GITHUB_OUTPUT.
 """
-import os, subprocess, sys
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import yaml
 
 
@@ -23,8 +28,8 @@ def is_ancestor(a, b):
     return git("merge-base", "--is-ancestor", a, b).returncode == 0
 
 
-code = yaml.safe_load(open("config/company.yml"))["code"]
-ci = yaml.safe_load(open("config/ci.yml"))
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
+ci = yaml.safe_load(Path("config/ci.yml").read_text())
 base, head, sha = os.environ["BASE"], os.environ["HEAD"], os.environ["HEAD_SHA"]
 env = base.removeprefix(f"{code}_")
 rule = ci["promotion"].get(env)

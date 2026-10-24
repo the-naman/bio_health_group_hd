@@ -1,7 +1,17 @@
-"""CI checks for a pull request into test or prod (same file in both repos). Run from the repo root:
+"""CI checks for a pull request into test or prod (same file in both repos; needs pyyaml and ruff). Run from the repo root:
     python ci/checks.py
 Fails (exit 1) when any check fails. Prints file names and line numbers only, never the matched text."""
-import ast, glob, json, re, subprocess, sys
+
+import ast
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
 import yaml
 
 sys.path.insert(0, "src")
@@ -26,21 +36,21 @@ def check(name, bad):
 
 
 files = subprocess.check_output(["git", "ls-files"], text=True).split()
-code = yaml.safe_load(open("config/company.yml"))["code"]
+code = yaml.safe_load(Path("config/company.yml").read_text())["code"]
 
 # 1. Python files and notebook code cells compile (magics like %pip and !cmd are skipped)
 bad = []
 for f in [f for f in files if f.endswith(".py")]:
     try:
-        ast.parse(open(f).read(), f)
+        ast.parse(Path(f).read_text(), f)
     except SyntaxError as e:
         bad.append(f"{f}:{e.lineno} {e.msg}")
 for f in [f for f in files if f.endswith(".ipynb")]:
-    for i, c in enumerate(json.load(open(f))["cells"]):
+    for i, c in enumerate(json.loads(Path(f).read_text())["cells"]):
         if c.get("cell_type") != "code":
             continue
         src = "".join(c["source"])
-        src = "\n".join("" if l.lstrip().startswith(("%", "!")) else l for l in src.splitlines())
+        src = "\n".join("" if line.lstrip().startswith(("%", "!")) else line for line in src.splitlines())
         try:
             ast.parse(src)
         except SyntaxError as e:
@@ -48,15 +58,19 @@ for f in [f for f in files if f.endswith(".ipynb")]:
 check("python and notebooks compile", bad)
 
 # 2. Notebooks are committed without outputs (outputs can hold data)
-bad = [f for f in files if f.endswith(".ipynb")
-       and any(c.get("outputs") for c in json.load(open(f))["cells"] if c.get("cell_type") == "code")]
+bad = [
+    f
+    for f in files
+    if f.endswith(".ipynb")
+    and any(c.get("outputs") for c in json.loads(Path(f).read_text())["cells"] if c.get("cell_type") == "code")
+]
 check("notebooks have no saved outputs", bad)
 
 # 3. YAML is valid (config and workflows)
 bad = []
 for f in [f for f in files if f.endswith((".yml", ".yaml"))]:
     try:
-        yaml.safe_load(open(f))
+        yaml.safe_load(Path(f).read_text())
     except yaml.YAMLError as e:
         bad.append(f"{f}: {str(e).splitlines()[0]}")
 check("yaml files parse", bad)
@@ -69,7 +83,7 @@ try:
         jobs.build(jcfg, code, env, "/Users/ci", "00000000-0000-0000-0000-000000000000")
     jobs.build(jcfg, code, "dev", "/Users/ci", role=sorted(jcfg["dev_roles"].values())[0])
     bad = []
-except Exception as e:
+except Exception as e:  # noqa: BLE001 - any error in building a job is reported as a failed check
     bad = [f"{type(e).__name__}: {e}"]
 check("config/jobs.yml builds a valid job for dev, test and prod", bad)
 
@@ -77,7 +91,7 @@ check("config/jobs.yml builds a valid job for dev, test and prod", bad)
 bad = []
 for f in sorted(glob.glob("bi/*.lvdash.json")):
     try:
-        text = open(f).read()
+        text = Path(f).read_text()
         json.loads(text)
     except ValueError as e:
         bad.append(f"{f}: not valid JSON ({e})")
@@ -91,7 +105,7 @@ check("dashboards valid and dev-catalog only", bad)
 bad_mail, bad_token = [], []
 for f in files:
     try:
-        text = open(f, encoding="utf-8").read()
+        text = Path(f).read_text(encoding="utf-8")
     except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
         continue
     for n, line in enumerate(text.splitlines(), 1):
@@ -102,6 +116,27 @@ for f in files:
 check("no email address in any file", bad_mail)
 check("no token or private key in any file", bad_token)
 
+# 7. Python style: ruff lint and format, rules in pyproject.toml (notebooks excluded: thin runners, compiled in check 1)
+RUFF = [shutil.which("ruff")] if shutil.which("ruff") else [sys.executable, "-m", "ruff"]
+lint = subprocess.run([*RUFF, "check", "--output-format", "concise", "."], capture_output=True, text=True)
+fmt = subprocess.run([*RUFF, "format", "--check", "."], capture_output=True, text=True)
+if "No module named ruff" in lint.stderr + fmt.stderr:
+    bad = ["ruff is not installed (pip install ruff==0.15.11)"]
+else:
+    bad = [x for x in lint.stdout.splitlines() if x and not x.startswith(("Found", "All checks", "["))]
+    bad += [x for x in fmt.stdout.splitlines() if x.startswith("Would reformat")]
+check("python lint and format (ruff)", bad)
+
+# 8. Shared code identical in both repos (ci/shared.py, rules in config/ci.yml -> shared). Needs the network to read the
+#    other repo, so it runs in CI; run python ci/shared.py by hand to check it from a terminal.
+if os.environ.get("GITHUB_ACTIONS") == "true":
+    res = subprocess.run([sys.executable, "ci/shared.py"], capture_output=True, text=True)
+    bad = [x.strip() for x in res.stdout.splitlines() if x.startswith("     ")] or (
+        [] if res.returncode == 0 else [res.stderr[-300:]]
+    )
+    check("shared files identical in both repos", bad)
+else:
+    print("INFO shared files: checked in CI (or run python ci/shared.py)")
+
 print(f"\n{len(passed)}/{len(passed) + len(problems)} PASS")
 sys.exit(1 if problems else 0)
-

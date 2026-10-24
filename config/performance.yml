@@ -1,0 +1,8 @@
+# Performance settings (same file in both repos). Baseline and decisions: docs/performance.md.
+bronze_parallel_tables: 4          # Bronze loads this many tables at once (each has its own Auto Loader checkpoint);
+                                   # 1 = one after the other (the old behaviour). Serverless runs them side by side.
+compact:                           # small-file tables compacted by the BI step when they pass the limits below
+  min_files: 50                    # fewer files than this: left alone (OPTIMIZE costs more than it saves)
+  max_avg_mb: 8                    # average file already this big or bigger: left alone
+  tables: [ops.audit_runs, ops.dq_results, ops.notice_log, silver.quarantine,
+           bronze.payment_events, silver.payment_events, gold.payment_failure_windows]   # missing tables are skipped

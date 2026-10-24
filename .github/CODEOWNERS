@@ -1,0 +1,7 @@
+# Who must know about a change (GitHub CODEOWNERS). Every pull request into test or prod also needs the
+# environment approval (Manager for test, Business Manager for prod); this file names the owner of each area.
+*                     @the-naman
+/config/privacy.yml   @the-naman
+/config/ci.yml        @the-naman
+/.github/             @the-naman
+/setup_once/          @the-naman

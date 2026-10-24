@@ -11,10 +11,11 @@ its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same env
 | `security/` | column masks and row filters, driven by `config/privacy.yml` |
 | `bi/` | BI views and AI/BI dashboards (published per environment) |
 | `jobs/` | the daily job as code (`config/jobs.yml`) |
-| `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix) |
+| `checks/` | automated checks (t00 = smoke check of every daily run, t28 = deployed jobs match config, t29 = each person's own access matches the access matrix, t33 = data dictionary in the catalog) |
+| `docs/` | operations runbook, disaster recovery, performance and cost, decision records (`adr/`) |
 | `ci/`, `.github/workflows/` | promotion checks, approval notices, deploy after a merge, business notices, alerts and the weekly digest |
 | `config/` | every setting, per environment. No secrets: they live in GitHub secrets and Databricks secret scopes |
-| `setup_once/` | one-time environment setup and access grants (admin) |
+| `setup_once/` | one-time environment setup and access grants (admin); access matrix in `src/lh/access.py`, checked by `02_verify_setup` |
 
 ## One framework, every table on its own (requirement 17)
 Bronze and Silver are metadata-driven: one engine per layer (`src/lh/bronze.py`, `src/lh/silver.py`) and one
@@ -77,8 +78,8 @@ a failed deploy goes to the fixers and Management only, never to the Business Ma
 |---|---|---|
 | a task failed | Databricks (`config/jobs.yml` notify) | at once, to the fixers |
 | figures delayed / up to date again, FQF merged | `ci/notices.py` (`notices.yml`) | business notice, once each |
-| data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed |
-| weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, mails sent |
+| data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed; FQF: failed-payment velocity, payment stream health (no finished run, no Kafka events, too many messages left out) |
+| weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, payment stream (FQF), mails sent |
 | dev activity | `ci/alerts.py --env dev --dev-activity` (daily 20:45 IST) | every dev job run of the day, to Developer and Team Lead (requirement 10) |
 | your own dev run | Databricks (`config/jobs.yml` notify.dev) | each person's dev job mails only its owner, on failure and on success |
 
@@ -95,7 +96,7 @@ top of the hour, where GitHub may delay or drop runs. Test and prod each run one
 
 | When (IST) | What | Does |
 |---|---|---|
-| 00:01, safety run 01:01 | `simulator.yml` | writes yesterday's source files (the safety run writes nothing if the day already exists) |
+| 00:01, safety run 01:01 | `simulator.yml` | writes yesterday's source files (the safety run writes nothing if the day already exists); if GitHub starts it after the daily job ran, its chain job runs that job again (`ci/chain.py`) |
 | 03:00 FQF, 04:00 BHG | `lh_<code>_prod_daily` | prod daily job (BHG after FQF: the group view reads FQF Gold) |
 | 05:00 FQF, 06:00 BHG | `lh_<code>_test_daily` | test daily job |
 | 03:45 to 19:45, every 2 h | `notices.yml` | business notices (figures delayed / up to date again / FQF merged) |
@@ -105,10 +106,21 @@ top of the hour, where GitHub may delay or drop runs. Test and prod each run one
 Dev jobs (`lh_bhg_dev_*_<role>`) have no schedule: each person runs their own. Daily checks: the smoke check
 (`checks/t00_job_smoke`) ends every daily run; a deploy is followed by `checks/t28_jobs`; access by `checks/t29_role_access`.
 
-When something goes wrong:
+When something goes wrong (full playbook: `docs/runbook.md`; losing data, secrets or the workspace: `docs/disaster_recovery.md`):
 - A failed task mails the fixers at once; a late or failed prod run also sends one plain "figures delayed" notice.
 - Re-run a failed test/prod job from Jobs -> the run -> Repair run (Manager in test, Management in prod).
 - A brand-new test/prod job fails its first deploy with "only workspace admins can change the owner of a job":
   Management opens the job -> Permissions, sets `sp_bhg_<env>` = Is Owner and `sp_lh_deploy` = Can Manage, Save,
   then re-runs the failed deploy in GitHub Actions (Re-run all jobs).
 - A stuck GitHub check: open the run and use "Re-run all jobs".
+
+## Working on this repo (standards)
+- Branch `<code>_dev`, run your own dev job, then open a pull request; the PR template lists what to check.
+- `python ci/checks.py` runs the same 8 checks as CI: compile, no notebook outputs, YAML, job config, dashboards,
+  no email or token, and ruff lint and format (rules in `pyproject.toml`; run `ruff format .` before committing).
+- `python -m pytest` runs the tests in `tests/` (about 2 minutes; Spark scenarios need Java). CI runs them on every PR.
+- Shared code (`src/lh`, `ci`, `simulator`, `tests`, most workflows) must stay identical in both repos; CI checks it on
+  every PR (`ci/shared.py`, list in `config/ci.yml` -> shared). Change both repos' dev branches before promoting.
+- New or changed Gold column or BI view: describe it in `config/dictionary.yml` in the same PR (one line, no quotes);
+  the tests fail otherwise, and `checks/t33_dictionary` checks the catalog after the next run.
+- Why things are built the way they are: `docs/adr/` (decision records). What changed when: `CHANGELOG.md`.
