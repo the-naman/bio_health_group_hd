@@ -31,13 +31,13 @@ jobs:
       flow: ${{ steps.r.outputs.flow }}
       environment: ${{ steps.r.outputs.environment }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0                        # route.py compares the branches (hotfix rules)
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.11"
-      - run: pip install --quiet pyyaml
+      - run: pip install --quiet pyyaml==6.0.3
       - id: r
         env:
           BASE: ${{ github.base_ref }}
@@ -50,11 +50,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.11"
-      - run: pip install --quiet pyyaml ruff==0.15.11 pytest==8.3.3 pyspark==3.5.3 pillow==11.0.0   # Spark tests use the runner's Java; Pillow for the FQF slip images
+      - run: pip install --quiet pyyaml==6.0.3 ruff==0.15.11 pytest==8.3.3 pyspark==3.5.3 pillow==11.0.0   # Spark tests use the runner's Java; Pillow for the FQF slip images
       - run: python ci/checks.py
       - run: python -m pytest -p no:cacheprovider   # tests/: config rules, simulator, scenarios on local Spark
 
@@ -63,11 +63,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.11"
-      - run: pip install --quiet pyyaml
+      - run: pip install --quiet pyyaml==6.0.3
       - name: Mail "approval needed"
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -103,11 +103,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.11"
-      - run: pip install --quiet pyyaml
+      - run: pip install --quiet pyyaml==6.0.3
       - name: Mail the result
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}

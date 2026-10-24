@@ -127,6 +127,21 @@ else:
     bad += [x for x in fmt.stdout.splitlines() if x.startswith("Would reformat")]
 check("python lint and format (ruff)", bad)
 
+# 7b. Supply chain: every GitHub action pinned to a full commit hash and every pip package to an exact version, so a
+#     moved tag or a new release can never change what CI and the deploy run. Dependabot proposes the updates.
+USES = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)")
+bad = []
+for f in sorted(glob.glob(".github/workflows/*.yml")):
+    for n, line in enumerate(Path(f).read_text().splitlines(), 1):
+        m = USES.match(line)
+        if m and not re.search(r"@[0-9a-f]{40}$", m.group(1)) and not m.group(1).startswith("./"):
+            bad.append(f"{f}:{n}: action not pinned to a commit hash")
+        if "pip install" in line:
+            pkgs = [w for w in line.split("pip install", 1)[1].split("#")[0].split() if not w.startswith("-")]
+            if [w for w in pkgs if "==" not in w]:
+                bad.append(f"{f}:{n}: pip package without an exact version")
+check("actions pinned by commit hash, pip versions pinned", bad)
+
 # 8. Shared code identical in both repos (ci/shared.py, rules in config/ci.yml -> shared). Needs the network to read the
 #    other repo, so it runs in CI; run python ci/shared.py by hand to check it from a terminal.
 if os.environ.get("GITHUB_ACTIONS") == "true":

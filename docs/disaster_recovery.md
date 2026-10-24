@@ -29,6 +29,7 @@ RPO = data that may be lost; RTO = time to be back. Times are measured on this p
 | Run and notice logs | `ops.audit_runs`, `ops.notice_log`, `ops.dq_results` | not backed up (logs) | recreated on the next run; a notice or alert may be sent once more | history | next run |
 | Catalogs, schemas, volumes, grants | Unity Catalog | `setup_once/notebook/00_setup_environment`, `01_grant_access`, `03_refresh_setup` | run them (Management / admin), then `02_verify_setup` | 0 | 1 h |
 | Masks, row filter | Unity Catalog | `config/privacy.yml` | applied by task `masks` and the Gold runner on every run | 0 | next run |
+| Token key (test, prod) | `lh_vault.<code>_<env>.mask_key` | none on purpose (never copied) | `04_vault_setup` if the vault is gone, then the next run creates a new key | tokens change once (ids and data unchanged) | next run |
 | Secret scopes | Databricks `lh_dev`, `lh_test`, `lh_prod`, `lh_refresh` | GitHub secrets | Actions -> setup-secret-scopes (approval in `bhg_admin`); `lh_refresh`: `03_refresh_setup` + the refresh workflow | 0 | 30 min |
 | Service principals | Databricks account | this document + `02_verify_setup` (expected names, groups, entitlements) | recreate, new OAuth secret into GitHub secrets, `01_grant_access` apply | 0 | 1-2 h |
 

@@ -83,3 +83,22 @@ def expected(code, env):
     for name, obj, privs in refresh_grants(code, env):
         out.setdefault(obj, set()).update((name, p) for p in privs)
     return out
+
+
+VAULT = "lh_vault"  # keyed token masks (docs/adr/0010): the key and the token function, test and prod only
+VAULT_ENVS = ("test", "prod")
+VAULT_SCHEMA = ["USE SCHEMA", "CREATE TABLE", "CREATE FUNCTION"]
+
+
+def vault_grants():
+    """Grants made by setup_once/notebook/04_vault_setup: [(principal, (type, name), privileges)].
+    Only each job account, only on its own schema lh_vault.<code>_<env>; no person, group or CI account. The job
+    account then owns the key table and the token function it creates there. Readers need nothing here: a column
+    mask runs with its owner's rights (proven 24 Oct: a reader with no vault access gets the keyed token, but can
+    neither read the key nor call the function)."""
+    out = []
+    for code in ("bhg", "fqf"):
+        for env in VAULT_ENVS:
+            sp = f"sp_{code}_{env}"
+            out += [(sp, ("CATALOG", VAULT), ["USE CATALOG"]), (sp, ("SCHEMA", f"{VAULT}.{code}_{env}"), VAULT_SCHEMA)]
+    return out

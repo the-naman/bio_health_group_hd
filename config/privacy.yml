@@ -6,6 +6,7 @@ clear:
   prod: [lh_management]
 pipeline: {test: sp_bhg_test, prod: sp_bhg_prod}                 # job accounts, always see real values
 
+vault: {catalog: lh_vault, environments: [test, prod]}         # keyed token masks: key + function in lh_vault.<catalog> (ADR 0010)
 layers: [bronze, silver, gold]                                   # gold tables get their masks in the gold runner
 
 # mask types:  last4   = only the last 4 characters shown

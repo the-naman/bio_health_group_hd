@@ -26,6 +26,13 @@ Notable changes to this platform, newest first (same file in both repos). Format
 - Simulator chain (`ci/chain.py`, chain job in `simulator.yml`): when GitHub starts the simulator after the daily job
   already ran, the job runs again for the new files (FQF, then BHG for the group view); never twice for the same files.
 - Smoke check WARN when a test/prod run loads no new source files.
+- Supply chain: GitHub actions pinned to commit hashes, pip packages to exact versions, checked by `ci/checks.py`;
+  Dependabot (`.github/dependabot.yml`) proposes action updates weekly; CodeQL code scanning on.
+- `checks/t29_role_access` reads its expectations from the access matrix (`src/lh/access.py`).
+- Keyed token masks in test/prod (ADR 0010): catalog `lh_vault` holds a random key and the token function, readable
+  only by the job account; readers still get tokens through the masks but can no longer rebuild ids by guessing.
+  One-time setup `setup_once/notebook/04_vault_setup`; checked by `t15_masks_applied`.
+- `SECURITY.md`: how to report a security problem (private vulnerability reporting).
 ### Fixed
 - `ci/flow.py` asks GitHub up to 3 times (busy, network, merge not linked yet) before mailing a deploy as a promotion.
 - `01_grant_access` prints job-account names, never their application ids.
