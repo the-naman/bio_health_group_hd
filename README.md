@@ -1,6 +1,60 @@
-# bio_health_group_hd
-Lakehouse pipelines of Bio Health Group (BHG), the parent company, and the group view that consolidates
-its child company Flexi Quant Finance (FQF): BHG Gold + FQF Gold of the same environment, read-only.
+# bio_health_group_hd: Bio Health Group lakehouse + group view
+Databricks lakehouse of Bio Health Group (BHG, the parent, healthcare) and the group view that consolidates its
+acquired lender Flexi Quant Finance (FQF). Companion repo: `flexi_quant_finance_fd`.
+
+## The problem
+A healthcare group (BHG) acquired a lender (FQF). The parent had standard pipelines; the child's data was spread over
+8 sources in 6 formats, messy and duplicated. The task: build the child's pipelines to the parent's standard, keep
+every company and environment isolated, protect personal data, and give the parent one trustworthy group view every
+night, with only code (never data) moving between environments.
+
+## Architecture
+```mermaid
+flowchart LR
+  subgraph SRC["Sources (synthetic, per environment)"]
+    S3["S3 landing<br/>CSV, pipe text, JSON,<br/>Excel CSV, PDF, PNG"]
+    K["Kafka topic<br/>payment events"]
+  end
+  subgraph FQF["fqf_&lt;env&gt; catalog"]
+    FB["Bronze<br/>Auto Loader"] --> FS["Silver<br/>clean, SCD2, quarantine,<br/>PDF + OCR, reconciliation"] --> FG["Gold<br/>SQL star schema"]
+    KS["Stream<br/>watermark dedup,<br/>10-min windows"]
+  end
+  subgraph BHG["bhg_&lt;env&gt; catalog"]
+    BB["Bronze"] --> BS["Silver"] --> BG["Gold"] --> GV["Group view<br/>people matched,<br/>intercompany removed"]
+  end
+  S3 --> FB
+  S3 --> BB
+  K --> KS
+  FG -- "read-only, same env" --> GV
+  GV --> BI["Views + dashboards<br/>masks and row filter<br/>per viewer"]
+  FG --> BI
+  KS --> BI
+  BI --> AL["Notices + alerts<br/>each finding once"]
+```
+Two repos share one framework (over 100 files kept identical by a CI guard). Each company has `dev`, `test` and `prod`
+catalogs with `bronze`, `silver`, `gold` and `ops`; BHG prod reads FQF prod Gold read-only for the group view.
+
+## What it proves
+| Area | Proof (prod unless stated) |
+|---|---|
+| Messy sources | 24 tables in 6 formats incl. a PDF bank statement and OCR of deposit-slip images; quarantine, orphans, late rows, a new column backfilled |
+| History and modelling | SCD2 in Silver; Gold in SQL (one file per table), point-in-time joins, every invoice and loan reconciles |
+| Group view | 401 people matched across companies of 1,180; 352 of 381 hospital-bill payouts matched; intercompany money counted once |
+| Real time | Kafka -> Structured Streaming -> 10-minute windows -> failed-payment velocity alert, mailed once |
+| Release safety | PRs with approval, 10 checks + tests + CodeQL, hotfix path with back-merge proven in prod, Asset Bundle validated in CI |
+| Operations | jobs as code on a night schedule, simulator chain, alerts and weekly digest, runbook and disaster-recovery note |
+| Performance | prod daily runs 11-14 min -> 7-10 min after measured tuning |
+
+## Security and privacy
+- Column masks, keyed tokens (key readable only by the job account, not even by admins), a row filter and closed raw
+  files; readers query dashboards as themselves.
+- Least privilege: jobs run as service principals; CI deploys as an account with no data access.
+- No secret, key, id or address in Git: GitHub secrets and Databricks secret scopes only; actions pinned by commit hash,
+  secret scanning with push protection, Dependabot, CodeQL. All data is synthetic.
+
+## Read more
+`docs/runbook.md` (operations), `docs/disaster_recovery.md`, `docs/performance.md`, `docs/adr/` (11 decisions),
+`CHANGELOG.md`. Each section below covers one part of the build.
 
 ## Layout
 | Folder | What it holds |
