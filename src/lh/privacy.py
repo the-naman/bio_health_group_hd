@@ -6,6 +6,8 @@ The data in the table is never changed, so the pipeline keeps working on real va
 
   last4   -> XXXXXXXX9012          initial -> A***
   token   -> PAY#7F3A21C4 (same input, same token: joins and counts still work)
+             in test and prod the token is keyed: a secret key in the vault catalog (privacy.yml -> vault) is hashed
+             with the value, so nobody can rebuild an id by hashing every possible id (docs/adr/0010)
   hide    -> NULL (one function per data type, because a mask must return the column's type)
 
 A row filter is a SQL function attached to a table. It decides per row whether the reader sees it:
@@ -14,6 +16,7 @@ a limited group sees only the rows of its listed ids (e.g. its hospitals), every
 
 import os
 import re
+import secrets
 
 import yaml
 
@@ -24,6 +27,9 @@ MASKED = {  # what a reader outside the clear groups sees; v is the column value
     "initial": "concat(left(trim(v), 1), '***')",
     "token": "concat(regexp_extract(v, '^[A-Z]{0,4}', 0), '#', upper(left(sha2(v, 256), 8)))",
 }
+KEYED_MASK = (  # test, prod: {key} = the one-row key table in the vault, readable only by the job account
+    "concat(regexp_extract(v, '^[A-Z]{{0,4}}', 0), '#', upper(left(sha2(concat((SELECT max(k) FROM {key}), v), 256), 8)))"
+)
 UUID = r"^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$"
 
 
@@ -48,7 +54,33 @@ def clear_sql(spark, env, clear=None):
     return " OR ".join(parts)
 
 
-def function_name(cfg, kind, dtype="string", prefix="mask_"):
+def vault(env):
+    """Vault catalog when the token is keyed in this environment, else None."""
+    v = load().get("vault", {})
+    return v.get("catalog") if env in v.get("environments", []) else None
+
+
+def key_table(cfg, env):
+    return f"{vault(env)}.{cfg['catalog']}.mask_key"
+
+
+def ensure_key(spark, cfg, env):
+    """Create the token key once (64 random hex characters from the operating system's secure random source).
+    Never replaced, never printed: replacing it would change every token. Written as data, not as SQL text, so the
+    key never appears in a query history. Returns True when it was created now."""
+    table = key_table(cfg, env)
+    if spark.catalog.tableExists(table):
+        return False
+    df = spark.createDataFrame([(secrets.token_hex(32),)], "k STRING")
+    df.write.mode("errorifexists").option("comment", "Token key. Job account only. Never print or copy.").saveAsTable(
+        table
+    )
+    return True
+
+
+def function_name(cfg, kind, dtype="string", prefix="mask_", env=None):
+    if kind == "token" and vault(env):
+        return f"{vault(env)}.{cfg['catalog']}.{prefix}token"
     if kind == "hide":
         return f"{cfg['catalog']}.ops.{prefix}hide_" + re.sub(r"[^a-z0-9]+", "_", dtype.lower()).strip("_")
     return f"{cfg['catalog']}.ops.{prefix}{kind}"
@@ -60,9 +92,12 @@ def create_function(spark, cfg, env, kind, dtype="string", prefix="mask_", clear
         masked = f"CAST(NULL AS {dtype})"
     elif dtype.lower() != "string":
         raise ValueError(f"mask type {kind} works on text only, not {dtype}")
+    elif kind == "token" and vault(env):
+        ensure_key(spark, cfg, env)
+        masked = KEYED_MASK.format(key=key_table(cfg, env))
     else:
         masked = MASKED[kind]
-    name = function_name(cfg, kind, dtype, prefix)
+    name = function_name(cfg, kind, dtype, prefix, env)
     spark.sql(f"""
         CREATE OR REPLACE FUNCTION {name}(v {dtype}) RETURNS {dtype}
         RETURN CASE WHEN {clear_sql(spark, env, clear)} THEN v ELSE {masked} END""")
@@ -125,17 +160,17 @@ def columns_of(spark, cat, layer):
     return out
 
 
-def masks_now(spark, cat):
-    """{(schema, table, column): mask function name} for every mask in the catalog."""
+def masks_now(spark, cat, full=False):
+    """{(schema, table, column): mask function name} for every mask in the catalog (full = catalog.schema.name)."""
     rows = spark.sql(f"""SELECT table_schema, table_name, column_name, mask_name
                          FROM {cat}.information_schema.column_masks""").collect()
-    return {(r[0], r[1], r[2]): r[3].split(".")[-1] for r in rows}
+    return {(r[0], r[1], r[2]): r[3] if full else r[3].split(".")[-1] for r in rows}
 
 
 def status(spark, cfg, env):
     """One row per column that must be masked: the function wanted and the function attached now."""
     p, cat = load(), cfg["catalog"]
-    renames, have = bronze_names(), masks_now(spark, cat)
+    renames, have = bronze_names(), masks_now(spark, cat, full=True)
     rows = []
     for layer in p["layers"]:
         columns = columns_of(spark, cat, layer)
@@ -148,7 +183,7 @@ def status(spark, cfg, env):
                     "column": column,
                     "kind": kind,
                     "dtype": dtype,
-                    "wanted": function_name(cfg, kind, dtype).split(".")[-1],
+                    "wanted": function_name(cfg, kind, dtype, env=env),
                     "actual": have.get((layer, table, column)),
                 }
             )
@@ -159,7 +194,7 @@ def apply(spark, cfg, env):
     """Attach the masks. Safe to run again: a column that already has the right mask is left alone."""
     cat = cfg["catalog"]
     ready = {
-        r[0]
+        f"{cat}.ops.{r[0]}"
         for r in spark.sql(
             f"SELECT routine_name FROM {cat}.information_schema.routines WHERE routine_schema = 'ops'"
         ).collect()
@@ -171,7 +206,7 @@ def apply(spark, cfg, env):
         # (e.g. lh_group_reader) then takes effect on the next run. Dev keeps them as they are (several people
         # run dev jobs and only the creator may replace a function; the dev clear list does not change).
         for kind, dtype in sorted({(r["kind"], r["dtype"] if r["kind"] == "hide" else "string") for r in rows}):
-            ready.add(create_function(spark, cfg, env, kind, dtype).rsplit(".", 1)[-1])
+            ready.add(create_function(spark, cfg, env, kind, dtype))
             done["functions_refreshed"] += 1
     for r in rows:
         if r["actual"] == r["wanted"]:
@@ -183,8 +218,12 @@ def apply(spark, cfg, env):
         target = f"{cat}.{r['layer']}.{r['table']}"
         if r["actual"]:
             spark.sql(f"ALTER TABLE {target} ALTER COLUMN `{r['column']}` DROP MASK")
-        spark.sql(f"ALTER TABLE {target} ALTER COLUMN `{r['column']}` SET MASK {cat}.ops.{r['wanted']}")
+        spark.sql(f"ALTER TABLE {target} ALTER COLUMN `{r['column']}` SET MASK {r['wanted']}")
         done["set"] += 1
+    old = f"{cat}.ops.mask_token"
+    if vault(env) and old in ready and old not in masks_now(spark, cat, full=True).values():
+        spark.sql(f"DROP FUNCTION IF EXISTS {old}")  # the unkeyed token: no column uses it any more
+        done["unkeyed_token_dropped"] = 1
     done.update({f"rows_{k}": v for k, v in apply_row_filters(spark, cfg, env).items()})
     return done
 
