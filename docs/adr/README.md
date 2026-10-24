@@ -15,3 +15,4 @@ consequences. A decision is changed by a new record that replaces the old one, n
 | 0008 | Alerts and notices from GitHub Actions, each finding once | Accepted |
 | 0009 | Data dictionary as comments in Unity Catalog, from one YAML file | Accepted |
 | 0010 | Keyed token masks, with the key in a vault catalog | Accepted |
+| 0011 | Asset Bundle generated from the job config, validated in CI, deployed by our own deployer | Accepted |

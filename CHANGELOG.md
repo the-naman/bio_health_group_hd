@@ -33,6 +33,9 @@ Notable changes to this platform, newest first (same file in both repos). Format
   only by the job account; readers still get tokens through the masks but can no longer rebuild ids by guessing.
   One-time setup `setup_once/notebook/04_vault_setup`; checked by `t15_masks_applied`.
 - `SECURITY.md`: how to report a security problem (private vulnerability reporting).
+- Databricks Asset Bundle: `databricks.yml` (test and prod jobs) generated from `config/jobs.yml` by
+  `python ci/bundle.py --write`; CI fails if it is out of date and validates it against the schema of a pinned
+  Databricks CLI (ADR 0011). Jobs are still deployed by our own deployer.
 - Bronze lists the landing folders level by level in parallel and reads file contents only when there are files
   (prod listing with 0 files took about 2.5 min); each run prints how long the listing took.
 - The token vault is part of the regular access checks: `02_verify_setup` (grants exactly as planned, one schema per
