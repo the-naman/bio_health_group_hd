@@ -68,3 +68,15 @@ def test_grant_and_verify_notebooks_use_the_one_matrix():
         cells = json.loads((ROOT / "setup_once" / "notebook" / f"{nb}.ipynb").read_text())["cells"]
         src = "".join("".join(c["source"]) for c in cells)
         assert "from lh import access" in src and '"lh_developer", "catalog"' not in src, nb
+
+
+def test_vault_is_checked_and_the_key_is_only_ever_counted():
+    """02_verify_setup and t29 check lh_vault (ADR 0010); no check may read the token key itself."""
+    import re
+
+    for path in ("setup_once/notebook/02_verify_setup.ipynb", "checks/t29_role_access.ipynb"):
+        cells = json.loads((ROOT / path).read_text())["cells"]
+        src = "".join("".join(c["source"]) for c in cells)
+        assert "access.VAULT" in src, path
+        reads = re.findall(r"SELECT ([^\"']*?) FROM [^\"']*mask_key", src)
+        assert reads and all(r.strip() == "count(*)" for r in reads), (path, reads)
