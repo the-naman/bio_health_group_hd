@@ -68,6 +68,8 @@ key, Gold is rebuilt in full, stream steps resume from their checkpoints, every 
 - Supply chain: actions are pinned to commit hashes and pip packages to exact versions (`ci/checks.py` fails otherwise);
   Dependabot opens weekly pull requests for newer actions; review, merge into dev and promote as usual. CodeQL scans
   every pull request and push (GitHub Settings -> Code security); its findings are under Security -> Code scanning.
+- Job config changed (`config/jobs.yml`, `config/stream.yml`)? Run `python ci/bundle.py --write` and commit
+  `databricks.yml` in the same pull request; CI fails otherwise (ADR 0011).
 - Token key (ADR 0010): never read, print, copy or replace `lh_vault.<code>_<env>.mask_key`; a new key changes every
   token in that environment. Nobody but the job account gets grants on `lh_vault` (`04_vault_setup` verifies it).
 

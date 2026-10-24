@@ -142,6 +142,17 @@ for f in sorted(glob.glob(".github/workflows/*.yml")):
                 bad.append(f"{f}:{n}: pip package without an exact version")
 check("actions pinned by commit hash, pip versions pinned", bad)
 
+# 7c. The Asset Bundle file is what the job config generates (docs/adr/0011); its schema is checked by ci/bundle.py
+#     in promote.yml with the pinned Databricks CLI (no login needed).
+from lh import bundle  # noqa: E402
+
+want = bundle.render(".", code)
+have = Path("databricks.yml").read_text() if Path("databricks.yml").exists() else None
+check(
+    "databricks.yml = generated from config/jobs.yml",
+    [] if have == want else ["databricks.yml differs: run python ci/bundle.py --write and commit it"],
+)
+
 # 8. Shared code identical in both repos (ci/shared.py, rules in config/ci.yml -> shared). Needs the network to read the
 #    other repo, so it runs in CI; run python ci/shared.py by hand to check it from a terminal.
 if os.environ.get("GITHUB_ACTIONS") == "true":
