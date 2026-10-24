@@ -32,27 +32,60 @@ def load_tables():
         return yaml.safe_load(f)["tables"]
 
 
-def list_landing(spark, cfg):
-    """One Spark job: every landing file as {(source, table): [(path, bytes), ...]}."""
+def _ls(path):
+    """One folder: [(path, is folder)]. Databricks only; tests pass their own lister."""
+    from databricks.sdk.runtime import dbutils
+
+    return [(f.path, f.isDir()) for f in dbutils.fs.ls(path)]
+
+
+def _walk(root, ls, workers):
+    """Every file below root. All folders of one level are listed at the same time by one pool of threads, so the
+    time grows with the depth of the tree (source/table/yyyy/mm = 4 levels), not with the number of folders.
+    The simulator's own folders (names starting with _) are not entered."""
+    files, level = [], [root]
+    with ThreadPoolExecutor(max(1, workers)) as pool:
+        while level:
+            nxt = []
+            for entries in pool.map(ls, level):
+                for path, is_dir in entries:
+                    if is_dir:
+                        if not path.rstrip("/").rsplit("/", 1)[-1].startswith("_"):
+                            nxt.append(path)
+                    else:
+                        files.append(path)
+            level = nxt
+    return files
+
+
+def list_landing(spark, cfg, ls=None, workers=None):
+    """Every landing file as {(source, table): [(path, bytes), ...]}.
+    24 Oct (docs/performance.md): the names are listed with parallel folder listings (prod: about 2.5 min with one
+    recursive Spark read even with 0 files); the contents are read by one Spark job only when there are files."""
     root = f"/Volumes/{cfg['catalog']}/bronze/landing/"
+    if workers is None:
+        with open(os.path.join(common.repo_root(), "config", "performance.yml")) as f:
+            workers = int(yaml.safe_load(f).get("landing_list_threads", 8))
     try:
-        rows = (
-            spark.read.format("binaryFile")
-            .option("recursiveFileLookup", "true")
-            .load(root)
-            .select("path", "content")
-            .collect()
-        )
+        found = _walk(root, ls or _ls, workers)
     except Exception as e:
-        if "PATH_NOT_FOUND" in str(e):
+        if "FileNotFound" in type(e).__name__ or "PATH_NOT_FOUND" in str(e) or "does not exist" in str(e):
             return {}
         raise
-    out = {}
-    for r in rows:
-        path = r["path"].replace("dbfs:", "", 1)
+    names = {}
+    for p in found:
+        path = p.replace("dbfs:", "", 1)
         parts = path.split("/landing/", 1)[1].split("/")
-        if len(parts) >= 3 and not parts[0].startswith("_"):  # skip the simulator's _sim folder
-            out.setdefault((parts[0], parts[1]), []).append((path, bytes(r["content"])))
+        if len(parts) >= 3 and not parts[0].startswith("_"):  # <source>/<table>/.../<file>
+            names[path] = (parts[0], parts[1])
+    if not names:
+        return {}
+    rows = spark.read.format("binaryFile").load(sorted(names)).select("path", "content").collect()
+    data = {r["path"].replace("dbfs:", "", 1): bytes(r["content"]) for r in rows}
+    out = {}
+    for path, key in sorted(names.items()):
+        if path in data:
+            out.setdefault(key, []).append((path, data[path]))
     return out
 
 

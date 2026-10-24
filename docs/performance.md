@@ -34,8 +34,10 @@ Task minutes in 7 days: bhg_test 99, fqf_test 67, bhg_prod 53, fqf_prod 52, stre
    each run (BHG 113, FQF 82 ALTER statements, about 1.5-2 minutes of the BI step), because the full Gold overwrite
    replaces the schema and drops column comments.
 6. Found in test after the promotion (24 Oct): Bronze took about 2 min 45 s even with 0 new files; the loading itself
-   took 0 s. The time is the listing of the landing folder (one Spark read of the S3 volume). Next candidate: list the
-   files cheaply (file listing API) and read only the new ones.
+   took 0 s. Measured 24 Oct (read-only probe, 0 files): one recursive Spark read of landing = dev 35 s, prod 153-161 s;
+   dbutils.fs.ls with 8 threads = dev 20 s, prod 78-82 s; Files API = dev 25 s, prod 105 s (prod has many more
+   source/table/year/month folders). Fixed: the names are listed level by level with 32 listings at once and the
+   contents are read only when there are files (no Spark job on a 0-file day); every run prints "landing listed in".
 7. `silver_rebuild` shows "not success" on every run: that is the task being skipped on purpose (it only runs after a
    failed Silver checkpoint), not a failure.
 
@@ -43,6 +45,7 @@ Task minutes in 7 days: bhg_test 99, fqf_test 67, bhg_prod 53, fqf_prod 52, stre
 | Change | Where | Expected effect |
 |---|---|---|
 | Bronze loads 4 tables side by side | `bronze.load_all`, `config/performance.yml` bronze_parallel_tables | Bronze 7-9 -> about 3 min; daily runs about 25-35% shorter; about 20 task minutes less per day over the four runs |
+| Landing listed level by level in parallel; contents read only when there are files | `bronze.list_landing`, `config/performance.yml` landing_list_threads | Bronze with 0 files: prod about 2.7 -> well under 1 min (to confirm in prod) |
 | Gold column descriptions written with the data | `gold.save` (`with_comments`), `src/lh/dictionary.py` | BI step about 2.5 -> about 1 min; a normal day sets 0 descriptions |
 | Daily compaction of small-file tables | `src/lh/maintain.py`, BI step, `config/performance.yml` compact | OPTIMIZE only when a table has 50+ files averaging under 8 MB; a normal day costs one DESCRIBE per table |
 Each table still has its own checkpoint, files and audit row; a failing table no longer stops the others, the task
