@@ -9,7 +9,8 @@ on:
         default: dev
         type: choice
         options: [dev, test, prod]
-  # Nightly run for test and prod, live since go-live (5.13, 23 Oct 2026). Jobs read the files at 03:00 (prod), 05:00 (test).
+  # Nightly run for test and prod, live since go-live (5.13, 23 Oct 2026). Jobs read the files at 03:00 (prod), 05:00 (test);
+  # if GitHub starts this run after a job already ran, the chain job below starts that job again.
   schedule:                 # GitHub may delay or drop scheduled runs at the top of the hour; times below are UTC.
     - cron: "31 18 * * *"   # 00:01 IST
     - cron: "31 19 * * *"   # 01:01 IST: safety run, writes nothing if the first one already wrote the day (catch-up)
@@ -34,6 +35,11 @@ jobs:
   simulate:
     needs: plan
     runs-on: ubuntu-24.04
+    outputs:                  # per environment: when the writing started and how many files were written (for chain)
+      since_test: ${{ steps.mark.outputs.since_test }}
+      files_test: ${{ steps.mark.outputs.files_test }}
+      since_prod: ${{ steps.mark.outputs.since_prod }}
+      files_prod: ${{ steps.mark.outputs.files_prod }}
     strategy:
       fail-fast: false
       matrix:
@@ -53,5 +59,60 @@ jobs:
           python-version: "3.11"
       - name: Install libraries
         run: pip install boto3 pillow
+      - name: Note when writing starts
+        id: start
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Write source files
+        id: write
         run: python -m simulator.run --company bhg --env ${{ matrix.env }} --s3
+      - name: Hand the result to the chain job
+        id: mark
+        run: |
+          echo "since_${{ matrix.env }}=${{ steps.start.outputs.at }}" >> "$GITHUB_OUTPUT"
+          echo "files_${{ matrix.env }}=${{ steps.write.outputs.files || 'unknown' }}" >> "$GITHUB_OUTPUT"
+
+  # GitHub may start the scheduled run hours late (24 Oct 2026: 03:05 instead of 00:01 IST), after the daily job already
+  # ran on an empty landing folder. Then ci/chain.py starts that job again (and for FQF also the BHG job). It runs only
+  # when new files were written for test/prod, in its own job: the deploy account never shares a job with the AWS key.
+  chain:
+    needs: [plan, simulate]
+    if: ${{ always() && needs.simulate.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.plan.outputs.envs) }}
+    steps:
+      - name: New files for this environment?
+        id: need
+        env:
+          FILES_TEST: ${{ needs.simulate.outputs.files_test }}
+          FILES_PROD: ${{ needs.simulate.outputs.files_prod }}
+        run: |
+          if [ "${{ matrix.env }}" = "test" ]; then files="$FILES_TEST"; else files="$FILES_PROD"; fi
+          if [ "${{ matrix.env }}" = "dev" ] || [ "$files" = "0" ] || [ -z "$files" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "nothing to chain ($files new files)"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.need.outputs.run == 'true'
+        with:
+          ref: bhg_${{ matrix.env }}
+      - uses: actions/setup-python@v7
+        if: steps.need.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+      - name: Start the daily job again if it ran before these files
+        if: steps.need.outputs.run == 'true' && hashFiles('ci/chain.py') != ''
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.LH_DEPLOY_CLIENT_ID }}          # deploy account sp_lh_deploy, never a person
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.LH_DEPLOY_CLIENT_SECRET }}
+          SINCE_TEST: ${{ needs.simulate.outputs.since_test }}
+          SINCE_PROD: ${{ needs.simulate.outputs.since_prod }}
+        run: |
+          if [ "${{ matrix.env }}" = "test" ]; then since="$SINCE_TEST"; else since="$SINCE_PROD"; fi
+          pip install --quiet pyyaml databricks-sdk==0.143.0
+          python ci/chain.py --env ${{ matrix.env }} --since "$since"
