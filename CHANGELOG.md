@@ -23,6 +23,9 @@ Notable changes to this platform, newest first (same file in both repos). Format
 - Performance (`docs/performance.md`, `config/performance.yml`): Bronze loads 4 tables side by side; the BI step
   compacts small-file tables (run logs, payment stream) only when needed.
 - Gold column descriptions are written with the data (`gold.save`), so the BI step no longer sets them again every run.
+- Simulator chain (`ci/chain.py`, chain job in `simulator.yml`): when GitHub starts the simulator after the daily job
+  already ran, the job runs again for the new files (FQF, then BHG for the group view); never twice for the same files.
+- Smoke check WARN when a test/prod run loads no new source files.
 ### Fixed
 - `ci/flow.py` asks GitHub up to 3 times (busy, network, merge not linked yet) before mailing a deploy as a promotion.
 - `01_grant_access` prints job-account names, never their application ids.

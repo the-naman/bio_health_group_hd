@@ -146,6 +146,7 @@ def main():
 
     if last and last >= upto:
         print(f"{a.company}/{a.env}: nothing to do (last={last}, upto={upto})")
+        report(0)
         return
     if delayed_day(a.env, a.company, upto) and upto > CUTOVER:
         upto -= timedelta(days=1)  # planned missing day: sent with the next run
@@ -164,6 +165,15 @@ def main():
         d += timedelta(days=1)
     sink.put(STATE_PREFIX + str(upto), "")
     print(f"{a.company}/{a.env}: done, {files} files, last business date {upto}")
+    report(files)
+
+
+def report(files):
+    """Tell the GitHub workflow how many files were written (ci/chain.py runs only when there are new files)."""
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as f:
+            f.write(f"files={files}\n")
 
 
 if __name__ == "__main__":

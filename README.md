@@ -96,7 +96,7 @@ top of the hour, where GitHub may delay or drop runs. Test and prod each run one
 
 | When (IST) | What | Does |
 |---|---|---|
-| 00:01, safety run 01:01 | `simulator.yml` | writes yesterday's source files (the safety run writes nothing if the day already exists) |
+| 00:01, safety run 01:01 | `simulator.yml` | writes yesterday's source files (the safety run writes nothing if the day already exists); if GitHub starts it after the daily job ran, its chain job runs that job again (`ci/chain.py`) |
 | 03:00 FQF, 04:00 BHG | `lh_<code>_prod_daily` | prod daily job (BHG after FQF: the group view reads FQF Gold) |
 | 05:00 FQF, 06:00 BHG | `lh_<code>_test_daily` | test daily job |
 | 03:45 to 19:45, every 2 h | `notices.yml` | business notices (figures delayed / up to date again / FQF merged) |
