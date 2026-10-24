@@ -1,0 +1,277 @@
+# GENERATED from config/jobs.yml and config/stream.yml by: python ci/bundle.py --write   (do not edit by hand)
+# Databricks Asset Bundle of this repo's test and prod jobs (docs/adr/0011). Jobs are deployed by our own deployer
+# (ci/deploy.py -> jobs/01_deploy_jobs); this file is the standard, portable description of the same jobs.
+bundle:
+  name: lh_bhg
+variables:
+  job_account:
+    description: application id of the job account sp_<code>_<env>, looked up by name
+targets:
+  test:
+    variables:
+      job_account:
+        lookup:
+          service_principal: sp_bhg_test
+    run_as:
+      service_principal_name: ${var.job_account}
+    resources:
+      jobs:
+        bhg_daily:
+          name: lh_bhg_test_daily
+          tags:
+            project: lh
+            company: bhg
+            env: test
+          max_concurrent_runs: 1
+          timeout_seconds: 9000
+          queue:
+            enabled: true
+          tasks:
+          - task_key: bronze
+            notebook_task:
+              notebook_path: ./bronze/01_load_bronze.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 1800
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+          - task_key: silver
+            notebook_task:
+              notebook_path: ./silver/01_load_silver.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 2700
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: bronze
+          - task_key: silver_rebuild
+            notebook_task:
+              notebook_path: ./silver/02_rebuild_silver.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 3600
+            max_retries: 0
+            depends_on:
+            - task_key: silver
+            run_if: AT_LEAST_ONE_FAILED
+          - task_key: masks
+            notebook_task:
+              notebook_path: ./security/01_apply_masks.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 900
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: silver
+            - task_key: silver_rebuild
+            run_if: AT_LEAST_ONE_SUCCESS
+          - task_key: gold
+            notebook_task:
+              notebook_path: ./gold/01_load_gold.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 1800
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: masks
+          - task_key: group
+            notebook_task:
+              notebook_path: ./gold/02_load_group.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 1800
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: gold
+          - task_key: bi_views
+            notebook_task:
+              notebook_path: ./bi/01_create_views.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 900
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: group
+          - task_key: publish
+            notebook_task:
+              notebook_path: ./bi/02_publish_dashboards.ipynb
+              base_parameters:
+                env: test
+                mode: apply
+            timeout_seconds: 900
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: bi_views
+          - task_key: smoke
+            notebook_task:
+              notebook_path: ./checks/t00_job_smoke.ipynb
+              base_parameters:
+                env: test
+            timeout_seconds: 900
+            max_retries: 0
+            depends_on:
+            - task_key: publish
+          schedule:
+            quartz_cron_expression: 0 0 6 * * ?
+            timezone_id: Asia/Kolkata
+            pause_status: UNPAUSED
+          permissions:
+          - level: CAN_MANAGE
+            group_name: lh_management
+          - level: CAN_MANAGE
+            group_name: lh_deploy
+          - level: CAN_MANAGE_RUN
+            group_name: lh_manager
+          - level: CAN_VIEW
+            group_name: lh_developer
+          - level: CAN_VIEW
+            group_name: lh_teamlead
+          - level: CAN_VIEW
+            group_name: lh_ci
+  prod:
+    variables:
+      job_account:
+        lookup:
+          service_principal: sp_bhg_prod
+    run_as:
+      service_principal_name: ${var.job_account}
+    resources:
+      jobs:
+        bhg_daily:
+          name: lh_bhg_prod_daily
+          tags:
+            project: lh
+            company: bhg
+            env: prod
+          max_concurrent_runs: 1
+          timeout_seconds: 9000
+          queue:
+            enabled: true
+          tasks:
+          - task_key: bronze
+            notebook_task:
+              notebook_path: ./bronze/01_load_bronze.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 1800
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+          - task_key: silver
+            notebook_task:
+              notebook_path: ./silver/01_load_silver.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 2700
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: bronze
+          - task_key: silver_rebuild
+            notebook_task:
+              notebook_path: ./silver/02_rebuild_silver.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 3600
+            max_retries: 0
+            depends_on:
+            - task_key: silver
+            run_if: AT_LEAST_ONE_FAILED
+          - task_key: masks
+            notebook_task:
+              notebook_path: ./security/01_apply_masks.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 900
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: silver
+            - task_key: silver_rebuild
+            run_if: AT_LEAST_ONE_SUCCESS
+          - task_key: gold
+            notebook_task:
+              notebook_path: ./gold/01_load_gold.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 1800
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: masks
+          - task_key: group
+            notebook_task:
+              notebook_path: ./gold/02_load_group.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 1800
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: gold
+          - task_key: bi_views
+            notebook_task:
+              notebook_path: ./bi/01_create_views.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 900
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: group
+          - task_key: publish
+            notebook_task:
+              notebook_path: ./bi/02_publish_dashboards.ipynb
+              base_parameters:
+                env: prod
+                mode: apply
+            timeout_seconds: 900
+            max_retries: 1
+            min_retry_interval_millis: 300000
+            retry_on_timeout: false
+            depends_on:
+            - task_key: bi_views
+          - task_key: smoke
+            notebook_task:
+              notebook_path: ./checks/t00_job_smoke.ipynb
+              base_parameters:
+                env: prod
+            timeout_seconds: 900
+            max_retries: 0
+            depends_on:
+            - task_key: publish
+          schedule:
+            quartz_cron_expression: 0 0 4 * * ?
+            timezone_id: Asia/Kolkata
+            pause_status: UNPAUSED
+          permissions:
+          - level: CAN_MANAGE
+            group_name: lh_management
+          - level: CAN_MANAGE
+            group_name: lh_deploy
+          - level: CAN_VIEW
+            group_name: lh_manager
+          - level: CAN_VIEW
+            group_name: lh_developer
+          - level: CAN_VIEW
+            group_name: lh_teamlead
+          - level: CAN_VIEW
+            group_name: lh_ci
