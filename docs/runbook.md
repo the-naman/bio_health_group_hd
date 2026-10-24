@@ -61,6 +61,13 @@ key, Gold is rebuilt in full, stream steps resume from their checkpoints, every 
 - New Gold column or BI view: describe it in `config/dictionary.yml` in the same pull request.
 - Hotfix: README "Emergency hotfix"; the back-merge pull request brings the fix to dev.
 - Workflow files (`.github/workflows/`) are uploaded by the repo owner (role credentials have no workflow scope).
+- While GitHub keeps the role accounts flagged (support tickets open), their pull requests are hidden and start no
+  workflow: the-naman opens every pull request and names who prepared it (template). Role accounts still push to dev.
+- A shared file that only the owner can upload (a workflow): upload it to both repos before opening the pull request;
+  if the drift guard ran in between, use Re-run failed jobs once both repos have it.
+- Supply chain: actions are pinned to commit hashes and pip packages to exact versions (`ci/checks.py` fails otherwise);
+  Dependabot opens weekly pull requests for newer actions; review, merge into dev and promote as usual. CodeQL scans
+  every pull request and push (GitHub Settings -> Code security); its findings are under Security -> Code scanning.
 
 ## 5. Routine maintenance
 | When | Task | How |

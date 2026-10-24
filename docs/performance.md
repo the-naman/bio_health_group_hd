@@ -33,7 +33,10 @@ Task minutes in 7 days: bhg_test 99, fqf_test 67, bhg_prod 53, fqf_prod 52, stre
 4. Found in the first dev run after the changes: the data dictionary set every Gold column description again on
    each run (BHG 113, FQF 82 ALTER statements, about 1.5-2 minutes of the BI step), because the full Gold overwrite
    replaces the schema and drops column comments.
-5. `silver_rebuild` shows "not success" on every run: that is the task being skipped on purpose (it only runs after a
+6. Found in test after the promotion (24 Oct): Bronze took about 2 min 45 s even with 0 new files; the loading itself
+   took 0 s. The time is the listing of the landing folder (one Spark read of the S3 volume). Next candidate: list the
+   files cheaply (file listing API) and read only the new ones.
+7. `silver_rebuild` shows "not success" on every run: that is the task being skipped on purpose (it only runs after a
    failed Silver checkpoint), not a failure.
 
 ## Changes
