@@ -69,12 +69,13 @@ def ensure_key(spark, cfg, env):
     Never replaced, never printed: replacing it would change every token. Written as data, not as SQL text, so the
     key never appears in a query history. Returns True when it was created now."""
     table = key_table(cfg, env)
-    if spark.catalog.tableExists(table):
-        return False
-    df = spark.createDataFrame([(secrets.token_hex(32),)], "k STRING")
-    df.write.mode("errorifexists").option("comment", "Token key. Job account only. Never print or copy.").saveAsTable(
-        table
+    spark.sql(
+        f"CREATE TABLE IF NOT EXISTS {table} (k STRING) COMMENT 'Token key. Job account only. Never print or copy.'"
     )
+    if spark.sql(f"SELECT count(*) FROM {table}").first()[0] > 0:
+        return False
+    # serverless supports append (not errorifexists); one job run at a time per environment, so no second writer
+    spark.createDataFrame([(secrets.token_hex(32),)], "k STRING").write.mode("append").saveAsTable(table)
     return True
 
 
