@@ -18,7 +18,7 @@ job:
   name: lh_{code}_{env}_stream
   job_timeout_minutes: 30
   schedule:                              # IST; never during the daily runs (03:00-06:30)
-    prod: {fqf: "0 30 7-21/2 * * ?"}     # 07:30, 09:30 ... 21:30 (producer sends 30 minutes before)
+    prod: {fqf: "0 30 7-21/2 * * ?"}     # 07:30, 09:30 ... 21:30 (producer sends about 50 minutes before)
     test: {fqf: "0 50 8-20/6 * * ?"}     # 08:50, 14:50, 20:50
   tasks:
     - {key: stream_bronze, notebook: stream/01_run_stream, params: {layer: bronze}, companies: [fqf], timeout: 15, retries: 1}
