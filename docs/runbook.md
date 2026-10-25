@@ -23,7 +23,7 @@ table, a checkpoint, a secret or the workspace) is in `docs/disaster_recovery.md
 | 05:00 / 06:00 | test daily job FQF, then BHG | smoke `t00` |
 | 03:45-19:45 / 2 h | business notices (figures delayed, up to date again, FQF merged) | sent once each |
 | 04:45-20:45 / 2 h | prod data alerts; 07:05 test alerts; Monday 09:15 digest; 20:45 dev activity | sent once each |
-| 07:00-21:00 / 2 h | producer sends payment events to Kafka (test, prod) | Actions -> stream green |
+| 06:37-20:37 / 2 h | producer sends payment events to Kafka (test, prod) | Actions -> stream green |
 | 07:30-21:30 / 2 h | `lh_fqf_prod_stream`; test 08:50, 14:50, 20:50 | stream health alert |
 
 Morning check (5 minutes, Developer): mailbox (failures, alerts, notices); Jobs -> the four test/prod daily runs green;

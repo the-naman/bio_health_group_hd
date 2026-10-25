@@ -70,5 +70,13 @@ days with files, measured in test and prod after promotion):
 
 | Job (test/prod, after promotion) | Bronze before | Bronze after | Run before | Run after |
 |---|---|---|---|---|
-| lh_fqf_prod_daily | 9.3 | | about 17 | |
-| lh_bhg_prod_daily | 7.1 | | about 16 | |
+| lh_fqf_prod_daily | 9.3 | 4.1 (13 files, 185 rows: listing 81 s, load 139 s) | about 17 | 13.3 (25 Oct, scheduled) |
+| lh_bhg_prod_daily | 7.1 | 3.7 (11 files, 218 rows: listing 85 s, load 117 s) | about 16 | 14.4 (25 Oct, scheduled) |
+
+Result: on a normal day with one new file per table, Bronze is 50-55% shorter and whole prod runs about 15-20% shorter.
+On a day with no new files (24 Oct evening, after the parallel listing): FQF prod 7.2 min, BHG prod 9.7 min, landing
+listed in 42 s and 84 s. The rest of each run (Silver, masks, Gold, group, BI) is unchanged by design.
+
+7. Found 25 Oct: the GitHub scheduler ran the payment-stream producer (`stream.yml`, cron minute :30) only 3 of 8 times
+   on 24 Oct and the simulator (:31) about 2.5 h late, while workflows at :15 ran close to time. The producer moved to
+   minute :07 (06:37-20:37 IST, about 50 minutes before each stream run). The stream health alert reports any gap.
