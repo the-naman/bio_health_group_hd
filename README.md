@@ -133,8 +133,8 @@ a failed deploy goes to the fixers and Management only, never to the Business Ma
 | a task failed | Databricks (`config/jobs.yml` notify) | at once, to the fixers |
 | figures delayed / up to date again, FQF merged | `ci/notices.py` (`notices.yml`) | business notice, once each |
 | data alert | `ci/alerts.py` (`alerts.yml`, every 2 h) | refused file, Silver rebuilt from Bronze, quarantine spike, new source column, BHG: group merge waiting, over-limit customers changed; FQF: failed-payment velocity, payment stream health (no finished run, no Kafka events, too many messages left out) |
-| weekly digest | `ci/alerts.py --digest` (Monday 09:15 IST) | runs and failures, freshness, quarantine, new columns, group numbers, payment stream (FQF), mails sent |
-| dev activity | `ci/alerts.py --env dev --dev-activity` (daily 20:45 IST) | every dev job run of the day, to Developer and Team Lead (requirement 10) |
+| weekly digest | `ci/alerts.py --digest` (Monday 09:17 IST) | runs and failures, freshness, quarantine, new columns, group numbers, payment stream (FQF), mails sent |
+| dev activity | `ci/alerts.py --env dev --dev-activity` (daily 20:49 IST) | every dev job run of the day, to Developer and Team Lead (requirement 10) |
 | your own dev run | Databricks (`config/jobs.yml` notify.dev) | each person's dev job mails only its owner, on failure and on success |
 
 Rules and recipients: `config/alerts.yml`. Each finding is mailed once (`ops.notice_log`, `alert_<kind>`); the
@@ -153,8 +153,8 @@ top of the hour, where GitHub may delay or drop runs. Test and prod each run one
 | 00:01, safety run 01:01 | `simulator.yml` | writes yesterday's source files (the safety run writes nothing if the day already exists); if GitHub starts it after the daily job ran, its chain job runs that job again (`ci/chain.py`) |
 | 03:00 FQF, 04:00 BHG | `lh_<code>_prod_daily` | prod daily job (BHG after FQF: the group view reads FQF Gold) |
 | 05:00 FQF, 06:00 BHG | `lh_<code>_test_daily` | test daily job |
-| 03:45 to 19:45, every 2 h | `notices.yml` | business notices (figures delayed / up to date again / FQF merged) |
-| 04:45 to 20:45, every 2 h | `alerts.yml` | data alerts for prod (after the prod jobs); 07:05 test; Monday 09:15 weekly digest; 20:45 dev activity |
+| 03:41 to 19:41, every 2 h | `notices.yml` | business notices (figures delayed / up to date again / FQF merged) |
+| 04:53 to 20:53, every 2 h | `alerts.yml` | data alerts for prod (after the prod jobs); 07:07 test; Monday 09:17 weekly digest; 20:49 dev activity |
 | 1st of the month, 08:47 | `keepalive.yml` | keeps the scheduled workflows enabled |
 
 Dev jobs (`lh_bhg_dev_*_<role>`) have no schedule: each person runs their own. Daily checks: the smoke check

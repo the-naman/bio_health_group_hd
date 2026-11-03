@@ -40,6 +40,10 @@ hotfix:
     deploy_failed: [developer, teamlead, manager, management]
   backmerge: [developer, teamlead, manager]     # "back-merge pull request prod -> dev opened"
 
+# 28a: watchdog for the monitoring workflows (ci/watchdog.py). When a scheduled alerts or notices run fails (e.g. the
+# Databricks Free Edition workspace paused), these roles get one mail, one reminder per day, and "monitoring back".
+watchdog: [developer, teamlead, manager, management]   # fixers + Management, never the Business Manager
+
 # Shared-code drift guard (ci/shared.py, docs/adr/0007): every file below must be identical in both repos.
 shared:
   repos: {bhg: the-naman/bio_health_group_hd, fqf: the-naman/flexi_quant_finance_fd}

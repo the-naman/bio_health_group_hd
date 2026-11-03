@@ -14,10 +14,10 @@ Alerts (every two hours; all new findings in one mail; each finding sent once vi
                drops an unusual share of messages (ops.audit_runs rows stream.<layer>; rules config/alerts.yml)
 Not repeated: a failed task (Databricks mails the fixers) and "figures delayed" (ci/notices.py).
 
-Digest (Monday 09:15 IST): runs and failures of the week, freshness, quarantine, new columns, merge and group
+Digest (Monday 09:17 IST): runs and failures of the week, freshness, quarantine, new columns, merge and group
 numbers (BHG), payment stream runs and events (FQF), alerts and notices sent. Once per ISO week.
 
-Dev activity (daily 20:45 IST, requirement 10: Developer <-> Team Lead): every run of the per-person dev jobs
+Dev activity (daily 20:49 IST, requirement 10: Developer <-> Team Lead): every run of the per-person dev jobs
 lh_<code>_dev_daily_<role> in the last 24 hours, with result, duration and failed tasks; no runs = no mail. Read from
 the Jobs API only (lh_ci has Can View on the dev jobs), no data. Roles: config/alerts.yml dev_activity_roles.
     python ci/alerts.py --env prod                      # check and send new alerts

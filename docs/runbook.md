@@ -21,8 +21,8 @@ table, a checkpoint, a secret or the workspace) is in `docs/disaster_recovery.md
 | 00:01, 01:01 | simulator writes yesterday's source files (safety run writes nothing if done); GitHub may start it hours late, then its chain job reruns the daily job | Actions -> simulator green (simulate + chain) |
 | 03:00 / 04:00 | prod daily job FQF, then BHG (group view reads FQF Gold) | smoke `t00` at the end of the run |
 | 05:00 / 06:00 | test daily job FQF, then BHG | smoke `t00` |
-| 03:45-19:45 / 2 h | business notices (figures delayed, up to date again, FQF merged) | sent once each |
-| 04:45-20:45 / 2 h | prod data alerts; 07:05 test alerts; Monday 09:15 digest; 20:45 dev activity | sent once each |
+| 03:41-19:41 / 2 h | business notices (figures delayed, up to date again, FQF merged) | sent once each |
+| 04:53-20:53 / 2 h | prod data alerts; 07:07 test alerts; Monday 09:17 digest; 20:49 dev activity | sent once each |
 | 06:37-20:37 / 2 h | producer sends payment events to Kafka (test, prod) | Actions -> stream green |
 | 07:30-21:30 / 2 h | `lh_fqf_prod_stream`; test 08:50, 14:50, 20:50 | stream health alert |
 
@@ -47,6 +47,7 @@ test or prod by hand. A prod problem that cannot wait uses the hotfix path (READ
 | Alert "payment stream health" (FQF) | Jobs -> `lh_fqf_<env>_stream`; Actions -> stream | no finished run: repair the job, check the Kafka login (scope `lh_<env>`); no events: check the producer run and the topic; many left out: look at broken/late rows in Bronze | Developer |
 | GitHub mail "Deploy FAILED" | Actions -> deploy -> the log | new job: "only workspace admins can change the owner": Management sets the job account Is Owner and `sp_lh_deploy` Can Manage, then Re-run all jobs. Else fix and re-run | Management, fixers |
 | Smoke WARN "this run loaded new source files" (0 files) | Actions -> simulator: did it run before the job? | GitHub started the simulator late; its chain job (`ci/chain.py`) starts the daily job again (FQF, then BHG) once the files are written. If the simulator did not run at all: run it by hand (env test/prod); the chain follows | Developer |
+| GitHub mail "Monitoring stopped / still down" (watchdog, alerts or notices) | Actions -> alerts or notices -> the failed run | usually Databricks paused after days without a sign-in or the warehouse stopped: sign in, start the SQL warehouse, Re-run all jobs; "Monitoring back" follows by itself. Else read the failed step | Developer; Management if the workspace needs an admin |
 | A GitHub check hangs or a scheduled run is missing | Actions -> the run | Re-run all jobs; run the workflow by hand (simulator, alerts, stream) | Developer |
 | Dashboard empty or old | task `publish` of the last run; `checks/t27_bi_publish` | repair the run from `bi_views` | Developer |
 | Someone cannot see or do something | `checks/t29_role_access` as that person | `setup_once/notebook/01_grant_access` preview, then apply (Management); verify with `02_verify_setup` | Management |
@@ -80,6 +81,7 @@ key, Gold is rebuilt in full, stream steps resume from their checkpoints, every 
 | Monday | read the weekly digest | all |
 | Monthly, 1st week | `setup_once/notebook/02_verify_setup` in both repos | Management: 0 FAIL |
 | Monthly | `checks/t29_role_access` per role | each person |
+| Every 3 days (e.g. Mon, Thu, Sun) | 28b: sign in to Databricks with the workspace owner account (the one that signed up for Free Edition); open SQL Warehouses and check it is Running. Free Edition pauses after a few days without a sign-in (29 Oct - 2 Nov: 4 silent days); job runs do not count as activity | workspace owner (Management) |
 | 20 Dec 2026 | rotation day: Git credential `lh_deploy_git_read` (expires 20 Dec), role GitHub tokens (90 days); check the expiry of the CI client secrets | replace in GitHub secrets / Git credentials; then one deploy per env |
 | 16 Jan 2027 | admin token in environment `bhg_admin` expires | new Management token, then setup-secret-scopes run |
 | On a leak or a leaver | rotate the affected secret at once | `docs/disaster_recovery.md` section 3 |
