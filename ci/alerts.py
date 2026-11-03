@@ -35,12 +35,16 @@ import ssl
 import sys
 import time
 from datetime import datetime, timedelta, timezone, UTC
-from email.message import EmailMessage
 from pathlib import Path
 
 import yaml
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem, StatementState
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mailer import build  # noqa: E402 - ci/ is not a package
+
+FOOTER = "Lakehouse operations alert. Please do not reply."
 
 p = argparse.ArgumentParser()
 p.add_argument("--env", required=True, choices=["dev", "test", "prod"])
@@ -67,27 +71,28 @@ today = now.strftime("%Y-%m-%d")
 w = WorkspaceClient()
 
 
-def mail(subject, body):
-    """One mail to the roles (nothing recorded); dry run / sample only prints."""
+def mail(subject, body, tone="info", title="Lakehouse"):
+    """One HTML mail to the roles (28d, ci/mailer.py; nothing recorded); dry run / sample only prints.
+    Returns True when the mail went out."""
     print(f"\n--- to {', '.join(roles)}\nSubject: [{name} {a.env}] {subject}\n{body}")
     if a.dry_run or a.sample:
         print("(not sent: dry run)")
-        return
+        return False
     to = []
     for r in roles:
         addr = os.environ.get(f"MAIL_{r.upper()}", "")
         if addr.count("@") != 1:
             sys.exit(f"MAIL secret for {r} is missing")
         to.append(addr)
-    msg = EmailMessage()
+    msg = build(subject, body, tone=tone, kicker=title, company=name, env=a.env, footer=FOOTER)
     msg["Subject"] = f"[{name} {a.env}] {subject}"
     msg["From"] = os.environ["SMTP_USER"]
     msg["To"] = ", ".join(sorted(set(to)))
-    msg.set_content(body + "\n\n-- Lakehouse operations alert. Please do not reply.")
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
         s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
         s.send_message(msg)
     print(f"mail sent to {', '.join(roles)}")
+    return True
 
 
 # ---------------------------------------------------------------- daily dev activity (requirement 10)
@@ -132,6 +137,8 @@ if a.dev_activity:
         + "\n\nDetails: Jobs & Pipelines -> lh_"
         + code
         + "_dev_daily_<role> -> the run.",
+        "info",
+        "Dev activity",
     )
     sys.exit(0)
 
@@ -169,26 +176,10 @@ def num(x):
     return int(float(x or 0))
 
 
-def send(subject, body, records):
-    """One mail to the roles; then every (notice, ref) in records is written to ops.notice_log."""
-    print(f"\n--- to {', '.join(roles)}\nSubject: [{name} {a.env}] {subject}\n{body}")
-    if a.dry_run or a.sample:
-        print("(not sent: dry run)")
+def send(subject, body, records, tone="warn", title="Data alert"):
+    """One mail to the roles (mail()); then every (notice, ref) in records is written to ops.notice_log."""
+    if not mail(subject, body, tone, title):
         return
-    to = []
-    for r in roles:
-        addr = os.environ.get(f"MAIL_{r.upper()}", "")
-        if addr.count("@") != 1:
-            sys.exit(f"MAIL secret for {r} is missing")
-        to.append(addr)
-    msg = EmailMessage()
-    msg["Subject"] = f"[{name} {a.env}] {subject}"
-    msg["From"] = os.environ["SMTP_USER"]
-    msg["To"] = ", ".join(sorted(set(to)))
-    msg.set_content(body + "\n\n-- Lakehouse operations alert. Please do not reply.")
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
-        s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
-        s.send_message(msg)
     for notice, ref in records:
         sql(
             "INSERT INTO ops.notice_log VALUES (:n, :r, current_timestamp(), :roles)",
@@ -196,7 +187,7 @@ def send(subject, body, records):
             r=ref,
             roles=",".join(roles),
         )
-    print(f"mail sent to {', '.join(roles)}, {len(records)} item(s) recorded")
+    print(f"{len(records)} item(s) recorded")
 
 
 sql("""CREATE TABLE IF NOT EXISTS ops.notice_log (notice STRING, ref STRING, sent_at TIMESTAMP, roles STRING)
@@ -281,7 +272,7 @@ if a.digest:
         "AND notice <> 'digest' GROUP BY notice ORDER BY notice"
     )
     out.append("Mails sent this week: " + (", ".join(f"{n} {c}" for n, c in s) if s else "none"))
-    send(f"Weekly data report ({ref})", "\n".join(out), [("digest", ref)])
+    send(f"Weekly data report ({ref})", "\n".join(out), [("digest", ref)], "info", "Weekly data report")
     sys.exit(0)
 
 
@@ -454,14 +445,25 @@ titles = {
     "velocity": "Failed-payment velocity",
     "stream": "Payment stream health",
 }
-body = []
-for kind in titles:
-    items = [t for k, _, t in found if k == kind]
-    if items:
-        body += [f"{titles[kind]}:"] + [f"  - {t}" for t in items] + [""]
-kinds = sorted({k for k, _, _ in found}, key=list(titles).index)
-send(
-    f"Data alert: {', '.join(titles[k].lower() for k in kinds)}",
-    "\n".join(body).rstrip(),
-    [(f"alert_{k}", r) for k, r, _ in found],
-)
+# 28d: failed-payment velocity always goes out as its own red mail, so a customer's failed payments are never buried
+# under file and quarantine alerts; everything else found in this run shares one amber "Data alert" mail.
+for group, tone, title in (
+    ({"velocity"}, "fail", "Failed payments"),
+    (set(titles) - {"velocity"}, "warn", "Data alert"),
+):
+    part = [f for f in found if f[0] in group]
+    if not part:
+        continue
+    body = []
+    for kind in titles:
+        items = [t for k, _, t in part if k == kind]
+        if items:
+            body += [f"{titles[kind]}:"] + [f"  - {t}" for t in items] + [""]
+    kinds = sorted({k for k, _, _ in part}, key=list(titles).index)
+    send(
+        f"Data alert: {', '.join(titles[k].lower() for k in kinds)}",
+        "\n".join(body).rstrip(),
+        [(f"alert_{k}", r) for k, r, _ in part],
+        tone,
+        title,
+    )
