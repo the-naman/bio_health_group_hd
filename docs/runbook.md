@@ -43,7 +43,7 @@ test or prod by hand. A prod problem that cannot wait uses the hotfix path (READ
 | Alert "new source columns" | `v_health_rescued` (column names only) | to use it: add to `from_rescued` in `config/silver.yml` by pull request; else ignore | Team Lead |
 | Alert "group merge waiting" (BHG) | FQF daily run of that env | run FQF, then BHG task `group` (Repair run) | Management (prod) |
 | Alert "over-limit customers" (BHG) | dashboard group_overview, `v_group_exposure` | business information, no technical action | Manager |
-| Alert "failed-payment velocity" (FQF) | `v_fqf_payment_alerts` (customer reference is a token) | business follow-up of that customer | Manager |
+| Red alert "failed-payment velocity" (FQF, always its own mail) | `v_fqf_payment_alerts` (customer reference is a token) | business follow-up of that customer | Manager |
 | Alert "payment stream health" (FQF) | Jobs -> `lh_fqf_<env>_stream`; Actions -> stream | no finished run: repair the job, check the Kafka login (scope `lh_<env>`); no events: check the producer run and the topic; many left out: look at broken/late rows in Bronze | Developer |
 | GitHub mail "Deploy FAILED" | Actions -> deploy -> the log | new job: "only workspace admins can change the owner": Management sets the job account Is Owner and `sp_lh_deploy` Can Manage, then Re-run all jobs. Else fix and re-run | Management, fixers |
 | Smoke WARN "this run loaded new source files" (0 files) | Actions -> simulator: did it run before the job? | GitHub started the simulator late; its chain job (`ci/chain.py`) starts the daily job again (FQF, then BHG) once the files are written. If the simulator did not run at all: run it by hand (env test/prod); the chain follows | Developer |

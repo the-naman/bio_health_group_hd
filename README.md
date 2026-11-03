@@ -137,6 +137,10 @@ a failed deploy goes to the fixers and Management only, never to the Business Ma
 | dev activity | `ci/alerts.py --env dev --dev-activity` (daily 20:49 IST) | every dev job run of the day, to Developer and Team Lead (requirement 10) |
 | your own dev run | Databricks (`config/jobs.yml` notify.dev) | each person's dev job mails only its owner, on failure and on success |
 
+All of these except the Databricks ones are HTML mails (28d, `ci/mailer.py`): colour shows the state (green done,
+amber warning, red failure, blue info, yellow urgent hotfix), the plain text travels with it. Failed-payment velocity
+always comes as its own red mail.
+
 Rules and recipients: `config/alerts.yml`. Each finding is mailed once (`ops.notice_log`, `alert_<kind>`); the
 scheduled run is live in dev, test and prod since go-live (23 Oct 2026). Alerts read only the health views
 (`gold.v_health_*`) and the ops logs as `sp_lh_notices`; no personal values, no row keys. The new-column watch

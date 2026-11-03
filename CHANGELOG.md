@@ -4,6 +4,12 @@ Notable changes to this platform, newest first (same file in both repos). Format
 
 ## Unreleased (dev)
 ### Added
+- HTML mails (28d, `ci/mailer.py`, same file in both repos): every mail the platform sends itself (promotion,
+  deploy, back-merge, data alerts, digest, dev activity, business notices, watchdog) has a coloured header with a small
+  animated status icon (`ci/mail_assets/*.gif`, made by `ci/mail_icons.py`), the company, an env badge, numbered steps,
+  tables and buttons. Green = done, amber = warning, red = failure, blue = info; an urgent hotfix approval is yellow
+  with black text on red. The plain text stays the first part of every mail; no remote images, no tracking, no scripts.
+  Databricks' own task-failure mails keep the Databricks look.
 - Monitoring watchdog (28a, `ci/watchdog.py`, roles `config/ci.yml` -> watchdog): when a scheduled alerts or notices run
   fails (for example the Databricks Free Edition workspace paused after days without a sign-in, 29 Oct - 2 Nov), the
   fixers and Management get one mail at once, one reminder per day while it stays down, and "monitoring back" when it
@@ -11,6 +17,8 @@ Notable changes to this platform, newest first (same file in both repos). Format
 - Sign-in rule (28b, `docs/runbook.md` maintenance): sign in with the workspace owner account every 3 days, because
   Free Edition pauses after a few days without a sign-in and job runs do not count as activity.
 ### Changed
+- Failed-payment velocity (FQF) is always its own red mail (28d), never mixed into the amber data alert, so a
+  customer's failed payments are not buried under file and quarantine alerts.
 - Alerts and notices start at odd minutes (28c): notices :11 (03:41-19:41 IST), prod alerts :23 (04:53-20:53), test
   alerts 07:07, Monday digest 09:17, dev activity 20:49. GitHub delayed or dropped about half of the :15 runs on 3 Nov.
 - Repo standards: ruff lint and format (`pyproject.toml`) enforced by `ci/checks.py`, PR template, CODEOWNERS,
