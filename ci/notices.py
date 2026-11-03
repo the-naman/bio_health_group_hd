@@ -22,12 +22,17 @@ import ssl
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
-from email.message import EmailMessage
 from pathlib import Path
 
 import yaml
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementParameterListItem, StatementState
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mailer import build  # noqa: E402 - ci/ is not a package
+
+# 28d: colour and title of each notice in the HTML mail (ci/mailer.py)
+LOOK = {"delayed": ("warn", "Figures delayed"), "recovered": ("ok", "Up to date again"), "merge": ("ok", "Group merge")}
 
 p = argparse.ArgumentParser()
 p.add_argument("--env", required=True, choices=["test", "prod"])
@@ -86,11 +91,19 @@ def send(notice, ref, subject, body):
         if addr.count("@") != 1:
             sys.exit(f"MAIL secret for {r} is missing")
         to.append(addr)
-    msg = EmailMessage()
+    tone, title = LOOK.get(notice, ("info", "Business notice"))
+    msg = build(
+        subject,
+        body,
+        tone=tone,
+        kicker=title,
+        company=name,
+        env=a.env,
+        footer="Lakehouse business notice. Please do not reply.",
+    )
     msg["Subject"] = f"[{name} {a.env}] {subject}"
     msg["From"] = os.environ["SMTP_USER"]
     msg["To"] = ", ".join(sorted(set(to)))
-    msg.set_content(body + "\n\n-- Lakehouse business notice. Please do not reply.")
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
         s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
         s.send_message(msg)

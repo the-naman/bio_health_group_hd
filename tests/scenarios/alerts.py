@@ -204,6 +204,7 @@ check(
     m["To"],
 )
 check("subject names the kinds", m["Subject"].startswith("[") and "Data alert:" in m["Subject"], m["Subject"])
+check("data alert is an amber HTML mail (28d)", "#b7791f" in m.get_body(("html",)).get_content())
 n_kinds = 6 if code == "bhg" else 4
 check(
     "findings recorded once each",
@@ -276,6 +277,32 @@ n = len(SENT)
 o = run("--env", "test")
 o2 = run("--env", "test")
 check("velocity alert mailed once", len(SENT) == n + 1 and "nothing new" in o2, o2)
+v = SENT[-1]
+check("velocity: its own mail (28d)", v["Subject"].endswith("Data alert: failed-payment velocity"), v["Subject"])
+vh = v.get_body(("html",)).get_content()
+check("velocity: red HTML mail titled Failed payments", "#c0392b" in vh and "Failed payments" in vh, vh[:300])
+check("velocity: plain text kept", "SC9123: 4 failed payments" in v.get_body(("plain",)).get_content())
+# a new refused file and a new velocity window in the same run: two mails, velocity first and never mixed in
+spark.createDataFrame(
+    [(NOW - dt.timedelta(hours=1), code, "test", "bronze.payments", "rejected", 0, "payments_20261022_00.csv: bad")],
+    "run_ts timestamp,company string,env string,job string,status string,rows bigint,message string",
+).write.mode("append").saveAsTable("ops.audit_runs")
+spark.createDataFrame(
+    [(NOW - dt.timedelta(hours=1), "SC7777", 6, D("900.00"), True)],
+    "window_start timestamp,customer_ref string,failed_payments int,failed_amount decimal(18,2),is_alert boolean",
+).write.mode("append").saveAsTable("gold.payment_failure_windows")
+n = len(SENT)
+o = run("--env", "test")
+pair = SENT[n:]
+check(
+    "velocity + other alert in one run: 2 mails, velocity alone in its own",
+    len(pair) == 2
+    and pair[0]["Subject"].endswith("Data alert: failed-payment velocity")
+    and "SC7777" in pair[0].get_body(("plain",)).get_content()
+    and "SC7777" not in pair[1].get_body(("plain",)).get_content()
+    and "payments_20261022_00.csv" in pair[1].get_body(("plain",)).get_content(),
+    [m["Subject"] for m in pair],
+)
 if code in yaml.safe_load(open("config/stream.yml")).get("companies", []):  # stream health (FQF)
     spark.createDataFrame(
         [

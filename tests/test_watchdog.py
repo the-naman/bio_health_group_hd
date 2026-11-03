@@ -134,8 +134,10 @@ def test_first_failure_mails_the_fixers(monkeypatch):
     msg = sent[0]
     assert "Monitoring stopped: alerts could not run" in msg["Subject"]
     assert msg["To"] == ", ".join(r + AT + "x.test" for r in ["dev", "mgmt", "mgr", "tl"])
-    body = msg.get_content()
+    body = msg.get_body(("plain",)).get_content()
     assert "Sign in to Databricks" in body and "https://github.com/o/r/actions/runs/9" in body
+    html = msg.get_body(("html",)).get_content()
+    assert "Monitoring stopped" in html and "#c0392b" in html  # 28d: red HTML mail
 
 
 def test_github_unreachable_still_mails_a_failure(monkeypatch):
@@ -149,6 +151,7 @@ def test_github_unreachable_good_run_sends_nothing(monkeypatch):
 def test_recovery_mail(monkeypatch):
     sent = main(monkeypatch, "success", [{"id": 8, "conclusion": "failure", "created_at": "2026-11-02T09:41:00Z"}])
     assert len(sent) == 1 and "Monitoring back" in sent[0]["Subject"]
+    assert "#1f8a4c" in sent[0].get_body(("html",)).get_content()  # 28d: green
 
 
 @pytest.mark.parametrize(("event", "result"), [("workflow_dispatch", "failure"), ("schedule", "cancelled")])

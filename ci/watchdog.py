@@ -29,8 +29,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone, UTC
-from email.message import EmailMessage
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mailer import build  # noqa: E402 - ci/ is not a package (standard library only, like this script)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 FAILED = {"failure", "timed_out", "startup_failure"}
@@ -103,6 +105,14 @@ def company_code():
     return m.group(1) if m else "lh"
 
 
+def company_name(code):
+    data = read_yaml("config/company.yml")
+    if data and data.get("name"):
+        return str(data["name"])
+    m = re.search(r"^name:\s*(.+)$", Path("config/company.yml").read_text(), re.M)
+    return m.group(1).strip().strip("'\"") if m else code.upper()
+
+
 def roles():
     data = read_yaml("config/ci.yml")
     return list((data or {}).get("watchdog") or DEFAULT_ROLES)
@@ -136,18 +146,29 @@ def message(kind, workflow, env, now, link):
     )
 
 
-def send(subject, body, env):
+def send(subject, body, env, kind="stopped"):
     to = []
     for r in roles():
         addr = os.environ.get(f"MAIL_{r.upper()}", "")
         if addr.count("@") != 1:
             sys.exit(f"MAIL secret for {r} is missing")
         to.append(addr)
-    msg = EmailMessage()
-    msg["Subject"] = f"[LH {company_code().upper()} {env}] {subject}"
+    code = company_code()
+    tone, title = {"back": ("ok", "Monitoring back"), "still": ("fail", "Monitoring still down")}.get(
+        kind, ("fail", "Monitoring stopped")
+    )
+    msg = build(
+        subject,
+        body,
+        tone=tone,
+        kicker=title,
+        company=company_name(code),
+        env=env,
+        footer="sent by GitHub Actions; reply is not read.",
+    )
+    msg["Subject"] = f"[LH {code.upper()} {env}] {subject}"
     msg["From"] = os.environ["SMTP_USER"]
     msg["To"] = ", ".join(sorted(set(to)))
-    msg.set_content(body + "\n\n-- sent by GitHub Actions; reply is not read.")
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
         s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
         s.send_message(msg)
@@ -177,7 +198,7 @@ def main():
         return
     link = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
     subject, body = message(kind, a.workflow, a.env, now, link)
-    send(subject, body, a.env)
+    send(subject, body, a.env, kind)
 
 
 if __name__ == "__main__":
