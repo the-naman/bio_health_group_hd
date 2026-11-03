@@ -48,7 +48,7 @@ watchdog: [developer, teamlead, manager, management]   # fixers + Management, ne
 shared:
   repos: {bhg: the-naman/bio_health_group_hd, fqf: the-naman/flexi_quant_finance_fd}
   roots: [src/lh/, ci/, simulator/, tests/, refresh/, stream/, docs/adr/, .github/]
-  files: [pyproject.toml, .editorconfig, .gitignore, CHANGELOG.md, config/ci.yml, config/alerts.yml, config/jobs.yml,
+  files: [pyproject.toml, .editorconfig, .gitignore, .gitattributes, CHANGELOG.md, config/ci.yml, config/alerts.yml, config/jobs.yml,
           config/gold.yml, config/stream.yml, checks/t29_role_access.ipynb, checks/t30_new_columns.ipynb,
           checks/t31_refresh.ipynb, checks/t33_dictionary.ipynb, docs/runbook.md, docs/disaster_recovery.md,
           setup_once/notebook/01_grant_access.ipynb, setup_once/notebook/02_verify_setup.ipynb,

@@ -4,6 +4,8 @@ Notable changes to this platform, newest first (same file in both repos). Format
 
 ## Unreleased (dev)
 ### Added
+- `.gitattributes` (shared): the Gold-layer `.sql` files now count in GitHub's language statistics
+  (`linguist-detectable`); SQL is otherwise treated as data and left out of the language bar.
 - HTML mails (28d, `ci/mailer.py`, same file in both repos): every mail the platform sends itself (promotion,
   deploy, back-merge, data alerts, digest, dev activity, business notices, watchdog) has a coloured header with a small
   animated status icon (`ci/mail_assets/*.gif`, made by `ci/mail_icons.py`), the company, an env badge, numbered steps,
