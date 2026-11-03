@@ -7,8 +7,8 @@ live: {dev: true, test: true, prod: true}      # live since go-live (5.13, 23 Oc
 roles:                                    # who gets the alerts (MAIL_<ROLE> GitHub secrets)
   test: [developer, teamlead, manager, management]
   prod: [developer, teamlead, manager, management]
-dev_activity_roles: [developer, teamlead] # requirement 10: daily digest of everyone's dev job runs (20:45 IST)
-digest_roles:                             # who gets the weekly digest (Monday 09:15 IST)
+dev_activity_roles: [developer, teamlead] # requirement 10: daily digest of everyone's dev job runs (20:49 IST)
+digest_roles:                             # who gets the weekly digest (Monday 09:17 IST)
   test: [developer, teamlead, manager, management]
   prod: [developer, teamlead, manager, management]
 lookback_days: 3                          # how far back rejected files and Silver rebuilds are looked at

@@ -1,6 +1,6 @@
 name: notices
 
-# 10e: business notices (same file in both repos). Every two hours from 03:45 IST it asks Databricks how the last
+# 10e: business notices (same file in both repos). Every two hours from 03:41 IST it asks Databricks how the last
 # daily run went and mails the business roles in plain language (ci/notices.py):
 #   "today's figures are delayed" / "figures are up to date again" and, in BHG, "what FQF data was merged".
 # Each notice is sent once (recorded in <catalog>.ops.notice_log). Technical failure mails come from Databricks.
@@ -11,7 +11,8 @@ name: notices
 
 on:
   schedule:
-    - cron: "15 22,0,2,4,6,8,10,12,14 * * *"   # UTC = 03:45 IST, then every 2 h until 19:45 IST
+    - cron: "11 22,0,2,4,6,8,10,12,14 * * *"   # UTC = 03:41 IST, then every 2 h until 19:41 IST
+    # 28c: minute :11, not :15, where GitHub delays or drops scheduled runs (3 Nov)
   workflow_dispatch:
     inputs:
       env:

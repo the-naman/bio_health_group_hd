@@ -8,6 +8,11 @@ Notable changes to this platform, newest first (same file in both repos). Format
   fails (for example the Databricks Free Edition workspace paused after days without a sign-in, 29 Oct - 2 Nov), the
   fixers and Management get one mail at once, one reminder per day while it stays down, and "monitoring back" when it
   works again. The main step has its own 12-minute limit so a hang still reaches the watchdog; manual runs send nothing.
+- Sign-in rule (28b, `docs/runbook.md` maintenance): sign in with the workspace owner account every 3 days, because
+  Free Edition pauses after a few days without a sign-in and job runs do not count as activity.
+### Changed
+- Alerts and notices start at odd minutes (28c): notices :11 (03:41-19:41 IST), prod alerts :23 (04:53-20:53), test
+  alerts 07:07, Monday digest 09:17, dev activity 20:49. GitHub delayed or dropped about half of the :15 runs on 3 Nov.
 - Repo standards: ruff lint and format (`pyproject.toml`) enforced by `ci/checks.py`, PR template, CODEOWNERS,
   `.editorconfig`, decision records in `docs/adr/`, this changelog.
 - Tests in the repo (`tests/`, pytest): config rules, simulator determinism and end-to-end scenarios on local Spark
