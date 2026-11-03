@@ -6,6 +6,8 @@ name: notices
 # Each notice is sent once (recorded in <catalog>.ops.notice_log). Technical failure mails come from Databricks.
 # Databricks access: service principal sp_lh_notices (group lh_ci, read-only grants from setup_once/01_grant_access).
 # By hand: Actions -> notices -> Run workflow; choose env and dry run (dry run = print only, send nothing).
+# 28a: if a scheduled run fails (e.g. Databricks paused), ci/watchdog.py mails the fixers (never business roles) once,
+# a daily reminder while it stays down, and "monitoring back" when it works again (roles: config/ci.yml -> watchdog).
 
 on:
   schedule:
@@ -24,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  actions: read      # 28a: the watchdog reads earlier runs of this workflow
 
 concurrency:
   group: notices-${{ github.repository }}
@@ -40,6 +43,7 @@ jobs:
           python-version: "3.11"
       - run: pip install --quiet pyyaml==6.0.3 databricks-sdk==0.143.0
       - name: Check the last run and the group merge, send what is new
+        timeout-minutes: 12   # 28a: a hang fails this step, so the watchdog below still runs
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.LH_NOTICES_CLIENT_ID }}          # service principal sp_lh_notices (group lh_ci):
@@ -60,3 +64,16 @@ jobs:
             *)       flag="" ;;
           esac
           python ci/notices.py --env "$ENV" $flag
+      - name: Watchdog, mail the fixers when this scheduled check fails or recovers (28a, ci/watchdog.py)
+        if: always() && github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RESULT: ${{ job.status }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          ENV: prod
+        run: python3 ci/watchdog.py --workflow notices --env "$ENV" --result "$RESULT"

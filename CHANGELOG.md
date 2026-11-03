@@ -4,6 +4,10 @@ Notable changes to this platform, newest first (same file in both repos). Format
 
 ## Unreleased (dev)
 ### Added
+- Monitoring watchdog (28a, `ci/watchdog.py`, roles `config/ci.yml` -> watchdog): when a scheduled alerts or notices run
+  fails (for example the Databricks Free Edition workspace paused after days without a sign-in, 29 Oct - 2 Nov), the
+  fixers and Management get one mail at once, one reminder per day while it stays down, and "monitoring back" when it
+  works again. The main step has its own 12-minute limit so a hang still reaches the watchdog; manual runs send nothing.
 - Repo standards: ruff lint and format (`pyproject.toml`) enforced by `ci/checks.py`, PR template, CODEOWNERS,
   `.editorconfig`, decision records in `docs/adr/`, this changelog.
 - Tests in the repo (`tests/`, pytest): config rules, simulator determinism and end-to-end scenarios on local Spark

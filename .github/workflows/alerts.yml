@@ -9,6 +9,8 @@ name: alerts
 # Scheduled runs use env prod (dev activity: env dev) and stay quiet until config/alerts.yml live is on (5.13).
 # Databricks access: service principal sp_lh_notices (group lh_ci, read-only grants), never the admin token.
 # By hand: Actions -> alerts -> Run workflow; choose env, what and mode (dry-run = print only, send nothing).
+# 28a: if a scheduled run fails (e.g. Databricks paused), ci/watchdog.py mails the fixers once, a daily reminder while it
+# stays down, and "monitoring back" when it works again (roles: config/ci.yml -> watchdog).
 
 on:
   schedule:
@@ -35,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  actions: read      # 28a: the watchdog reads earlier runs of this workflow
 
 concurrency:
   group: alerts-${{ github.repository }}
@@ -51,6 +54,7 @@ jobs:
           python-version: "3.11"
       - run: pip install --quiet pyyaml==6.0.3 databricks-sdk==0.143.0
       - name: Look at the health views, send what is new
+        timeout-minutes: 12   # 28a: a hang fails this step, so the watchdog below still runs
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.LH_NOTICES_CLIENT_ID }}          # service principal sp_lh_notices (group lh_ci):
@@ -75,3 +79,16 @@ jobs:
           [ "$WHAT" = dev-activity ] && flags="$flags --dev-activity"
           [ "$SCHEDULED" = yes ] && flags="$flags --scheduled"
           python ci/alerts.py --env "$ENV" $flags
+      - name: Watchdog, mail the fixers when this scheduled check fails or recovers (28a, ci/watchdog.py)
+        if: always() && github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RESULT: ${{ job.status }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_DEVELOPER: ${{ secrets.MAIL_DEVELOPER }}
+          MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
+          MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
+          MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
+          ENV: ${{ github.event.schedule == '15 15 * * *' && 'dev' || (github.event.schedule == '35 1 * * *' && 'test' || 'prod') }}
+        run: python3 ci/watchdog.py --workflow alerts --env "$ENV" --result "$RESULT"
