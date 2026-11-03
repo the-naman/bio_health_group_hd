@@ -62,7 +62,7 @@ def decide(result, current_id, runs, now):
 def scheduled_runs(repo, workflow):
     """Completed scheduled runs of <workflow>.yml, newest first; None when GitHub cannot be asked."""
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}.yml/runs?event=schedule&status=completed&per_page=30"
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 - fixed https://api.github.com URL
         url,
         headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
     )
