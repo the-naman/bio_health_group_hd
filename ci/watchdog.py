@@ -11,10 +11,12 @@ paused after a few days without a sign-in, 29 Oct - 2 Nov 2026), no alert and no
 Recipients: config/ci.yml -> watchdog (roles; addresses from the MAIL_<ROLE> secrets, never printed). Business roles
 never get these mails. If GitHub cannot be asked about earlier runs, a failed run is mailed anyway (better one mail too
 many than silence) and a good run sends nothing. Manual runs (workflow_dispatch) send nothing: someone is watching.
+Timer runs count as scheduled (29a): the VPS timer lh-tick starts alerts on time with workflow_dispatch and input
+timed=true (run name "alerts timer <env>", env TIMED=yes), because GitHub's own scheduler skips or delays many runs.
 Python standard library only (plus pyyaml when installed), so it still works when an earlier setup step failed.
 
     python3 ci/watchdog.py --workflow alerts --env prod --result failure
-Env: GITHUB_EVENT_NAME, GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_SERVER_URL, SMTP_USER,
+Env: GITHUB_EVENT_NAME, TIMED, GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_SERVER_URL, SMTP_USER,
      SMTP_APP_PASSWORD, MAIL_<ROLE>.
 """
 
@@ -61,9 +63,8 @@ def decide(result, current_id, runs, now):
     return None if failed_today else "still"
 
 
-def scheduled_runs(repo, workflow):
-    """Completed scheduled runs of <workflow>.yml, newest first; None when GitHub cannot be asked."""
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}.yml/runs?event=schedule&status=completed&per_page=30"
+def _runs(url):
+    """Completed runs from one GitHub list URL; None when GitHub cannot be asked."""
     req = urllib.request.Request(  # noqa: S310 - fixed https://api.github.com URL
         url,
         headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
@@ -72,10 +73,7 @@ def scheduled_runs(repo, workflow):
     for attempt in range(1, TRIES + 1):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - fixed https://api.github.com URL
-                return [
-                    {"id": x["id"], "conclusion": x.get("conclusion") or "", "created_at": x["created_at"]}
-                    for x in json.load(r).get("workflow_runs", [])
-                ]
+                return json.load(r).get("workflow_runs", [])
         except urllib.error.HTTPError as e:
             why = f"HTTP {e.code}"
             if e.code < 500 and e.code != 429:  # 4xx: asking again gives the same answer
@@ -84,8 +82,24 @@ def scheduled_runs(repo, workflow):
             why = type(e).__name__
         if attempt < TRIES:
             time.sleep(WAIT * attempt)
-    print(f"::warning::could not read earlier {workflow} runs ({why})")
+    print(f"::warning::could not read earlier runs ({why})")
     return None
+
+
+def scheduled_runs(repo, workflow):
+    """Completed scheduled and timer runs (29a) of <workflow>.yml, newest first; None when GitHub cannot be asked.
+    Timer runs are the workflow_dispatch runs named "<workflow> timer ..."; other manual runs are left out."""
+    base = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}.yml/runs?status=completed&per_page=30"
+    sched, disp = _runs(f"{base}&event=schedule"), _runs(f"{base}&event=workflow_dispatch")
+    if sched is None or disp is None:
+        return None
+    timer = [x for x in disp if str(x.get("display_title") or "").startswith(f"{workflow} timer")]
+    seen, out = set(), []
+    for x in sorted(sched + timer, key=lambda x: x["created_at"], reverse=True):
+        if x["id"] not in seen:
+            seen.add(x["id"])
+            out.append({"id": x["id"], "conclusion": x.get("conclusion") or "", "created_at": x["created_at"]})
+    return out
 
 
 def read_yaml(path):
@@ -181,7 +195,7 @@ def main():
     p.add_argument("--env", required=True, choices=["dev", "test", "prod"])
     p.add_argument("--result", required=True)  # job.status: success, failure or cancelled
     a = p.parse_args()
-    if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+    if os.environ.get("GITHUB_EVENT_NAME") != "schedule" and os.environ.get("TIMED") != "yes":
         print("watchdog: manual run, nothing to send")
         return
     if a.result == "cancelled":
