@@ -22,8 +22,8 @@ table, a checkpoint, a secret or the workspace) is in `docs/disaster_recovery.md
 | 03:00 / 04:00 | prod daily job FQF, then BHG (group view reads FQF Gold) | smoke `t00` at the end of the run |
 | 05:00 / 06:00 | test daily job FQF, then BHG | smoke `t00` |
 | 03:41-19:41 / 2 h | business notices (figures delayed, up to date again, FQF merged) | sent once each |
-| 04:53-20:53 / 2 h | prod data alerts; 07:07 test alerts; Monday 09:17 digest; 20:49 dev activity | sent once each |
-| 06:37-20:37 / 2 h | producer sends payment events to Kafka (test, prod) | Actions -> stream green |
+| 04:53-20:53 / 2 h | prod data alerts; 07:07 test alerts (both started on time by the VPS timer `lh-tick`, section 7); Monday 09:17 digest; 20:49 dev activity | sent once each; Actions -> alerts: runs "alerts timer prod" green |
+| 06:34-20:34 / 2 h | producer sends payment events to Kafka (test, prod), started by the VPS timer `lh-tick` (section 7) | Actions -> stream: runs "stream timer" green; each stream run has rows |
 | 07:30-21:30 / 2 h | `lh_fqf_prod_stream`; test 08:50, 14:50, 20:50 | stream health alert |
 
 Morning check (5 minutes, Developer): mailbox (failures, alerts, notices); Jobs -> the four test/prod daily runs green;
@@ -44,7 +44,7 @@ test or prod by hand. A prod problem that cannot wait uses the hotfix path (READ
 | Alert "group merge waiting" (BHG) | FQF daily run of that env | run FQF, then BHG task `group` (Repair run) | Management (prod) |
 | Alert "over-limit customers" (BHG) | dashboard group_overview, `v_group_exposure` | business information, no technical action | Manager |
 | Red alert "failed-payment velocity" (FQF, always its own mail) | `v_fqf_payment_alerts` (customer reference is a token) | business follow-up of that customer | Manager |
-| Alert "payment stream health" (FQF) | Jobs -> `lh_fqf_<env>_stream`; Actions -> stream | no finished run: repair the job, check the Kafka login (scope `lh_<env>`); no events: check the producer run and the topic; many left out: look at broken/late rows in Bronze | Developer |
+| Alert "payment stream health" (FQF) | Jobs -> `lh_fqf_<env>_stream`; Actions -> stream | no finished run: repair the job, check the Kafka login (scope `lh_<env>`); no events: are there "stream timer" runs every 2 h (no: section 7, VPS timer), then the producer run and the topic; many left out: look at broken/late rows in Bronze | Developer |
 | GitHub mail "Deploy FAILED" | Actions -> deploy -> the log | new job: "only workspace admins can change the owner": Management sets the job account Is Owner and `sp_lh_deploy` Can Manage, then Re-run all jobs. Else fix and re-run | Management, fixers |
 | Smoke WARN "this run loaded new source files" (0 files) | Actions -> simulator: did it run before the job? | GitHub started the simulator late; its chain job (`ci/chain.py`) starts the daily job again (FQF, then BHG) once the files are written. If the simulator did not run at all: run it by hand (env test/prod); the chain follows | Developer |
 | GitHub mail "Monitoring stopped / still down" (watchdog, alerts or notices) | Actions -> alerts or notices -> the failed run | usually Databricks paused after days without a sign-in or the warehouse stopped: sign in, start the SQL warehouse, Re-run all jobs; "Monitoring back" follows by itself. Else read the failed step | Developer; Management if the workspace needs an admin |
@@ -83,7 +83,7 @@ key, Gold is rebuilt in full, stream steps resume from their checkpoints, every 
 | Monthly | `checks/t29_role_access` per role | each person |
 | Every 3 days (e.g. Mon, Thu, Sun) | 28b: sign in to Databricks with the workspace owner account (the one that signed up for Free Edition); open SQL Warehouses and check it is Running. Free Edition pauses after a few days without a sign-in (29 Oct - 2 Nov: 4 silent days); job runs do not count as activity | workspace owner (Management) |
 | 20 Dec 2026 | rotation day: Git credential `lh_deploy_git_read` (expires 20 Dec), role GitHub tokens (90 days); check the expiry of the CI client secrets | replace in GitHub secrets / Git credentials; then one deploy per env |
-| 16 Jan 2027 | admin token in environment `bhg_admin` expires | new Management token, then setup-secret-scopes run |
+| 16 Jan 2027 | admin token in environment `bhg_admin` expires; the VPS timer token `lh-tick` expires the same day | new Management token, then setup-secret-scopes run; new `lh-tick` token: section 7 |
 | On a leak or a leaver | rotate the affected secret at once | `docs/disaster_recovery.md` section 3 |
 
 ## 6. Useful checks
@@ -91,4 +91,28 @@ key, Gold is rebuilt in full, stream steps resume from their checkpoints, every 
 `t15_masks_applied`, `t26_bi_views`, `t31_refresh`, `t32_stream`, `t33_dictionary`, `setup_once/notebook/02_verify_setup`.
 Alerts by hand: Actions -> alerts -> env, what, mode dry-run (prints, sends nothing).
 
-Note: GitHub's free scheduler may start scheduled workflows late or skip runs at busy times (seen 24 Oct 2026: simulator 3 h late, notices about every 6 h instead of 2 h). Nothing here depends on exact times: alerts and notices are sent once whenever they run, and the simulator chain restores the order source files -> daily job.
+Note: GitHub's free scheduler may start scheduled workflows late or skip runs at busy times (seen 24 Oct 2026: simulator 3 h late, notices about every 6 h instead of 2 h; 11-12 Nov: 3 of 16 producer runs and 4 of 18 prod alert checks). Alerts and notices are sent once whenever they run, and the simulator chain restores the order source files -> daily job. The producer cannot wait (a stream run with no events is lost), so it and the alerts are started on time by the VPS timer (section 7).
+
+## 7. VPS timer `lh-tick` (29a)
+GitHub's scheduler skipped most producer and alert runs, so the portfolio VPS starts them on time with GitHub's
+"Run workflow" call (workflow_dispatch, input `timed=true`). A timed run behaves exactly like a scheduled run: stream
+sends to test and prod for real; alerts sends for real and runs the watchdog. GitHub's own schedules stay as the
+fallback: a late scheduled stream run skips its send when a timer run started in the last 125 minutes (gate job), and a
+second alerts run sends nothing new (each finding once).
+
+| Timer (IST) | Starts | Run name in Actions |
+|---|---|---|
+| 06:34, 08:34 ... 20:34 | FQF `stream.yml` (test and prod) | `stream timer` |
+| 04:53, 06:53 ... 20:53 | `alerts.yml`, env prod, both repos | `alerts timer prod` |
+| 07:07 | `alerts.yml`, env test, both repos | `alerts timer test` |
+
+- On the VPS: `/usr/local/bin/lh-tick`, units `lh-tick@.service` and `lh-tick-*.timer` in `/etc/systemd/system/`,
+  token in `/etc/lh-tick/token.env` (root only, mode 600). The service runs as a throw-away system user with no home
+  and no write access; the token is never in a command line or a log.
+- Token: GitHub fine-grained token `lh-tick`, owner the-naman, only these two repositories, permission Actions: read
+  and write (Metadata: read is added by GitHub). Nothing else. Expires 16 Jan 2027 (section 5).
+- Checks: `systemctl list-timers 'lh-tick*'` (next and last run); `journalctl -u 'lh-tick@*' -n 30 --no-pager`
+  (one line per started workflow, or the error); `sudo lh-tick check` (token can see both repos, starts nothing).
+- Timer missing a run (VPS down or restarted): the GitHub schedule still runs, late. Fix the VPS, nothing else.
+- New token: create it as above, put it into `/etc/lh-tick/token.env` (`GH_TOKEN=...`), run `sudo lh-tick check`,
+  then delete the old token on GitHub. No restart is needed: every run reads the file again.

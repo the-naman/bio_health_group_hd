@@ -1,0 +1,3 @@
+# GitHub language statistics (linguist). SQL counts as "data" by default and is left out of a repo's language
+# bar; the Gold layer is written in SQL, so count it as code. Same file in both repos (config/ci.yml -> shared).
+*.sql linguist-detectable
