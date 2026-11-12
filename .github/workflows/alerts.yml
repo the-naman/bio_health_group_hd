@@ -1,4 +1,5 @@
 name: alerts
+run-name: ${{ inputs.timed && format('alerts timer {0}', inputs.env) || 'alerts' }}
 
 # 5.12: operational alerts and the weekly digest (same file in both repos), sent by ci/alerts.py.
 # Every two hours (after the prod jobs: 04:53 to 20:53 IST) it looks at the prod health views and mails new findings once;
@@ -11,6 +12,10 @@ name: alerts
 # By hand: Actions -> alerts -> Run workflow; choose env, what and mode (dry-run = print only, send nothing).
 # 28a: if a scheduled run fails (e.g. Databricks paused), ci/watchdog.py mails the fixers once, a daily reminder while it
 # stays down, and "monitoring back" when it works again (roles: config/ci.yml -> watchdog).
+# 29a: GitHub's scheduler skipped or delayed most runs (11-12 Nov: 4 of 18 prod checks, up to 3.5 h late), so the VPS
+# timer lh-tick (docs/runbook.md section 7) starts the prod checks (04:53-20:53 IST) and the test check (07:07) on time:
+# workflow_dispatch with timed=true, mode send, run name "alerts timer <env>". It runs exactly like a scheduled run
+# (watchdog included). The schedule below stays as a fallback; a second run sends nothing new (each finding once).
 
 on:
   schedule:
@@ -35,6 +40,10 @@ on:
         description: dry-run = print, send nothing; sample = print every alert with today's data; send = for real
         options: [dry-run, sample, send]
         default: dry-run
+      timed:
+        type: boolean
+        description: Set only by the VPS timer lh-tick (29a) - runs like a scheduled run (mode send, watchdog)
+        default: false
 
 permissions:
   contents: read
@@ -68,8 +77,8 @@ jobs:
           MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
           ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.env || (github.event.schedule == '19 15 * * *' && 'dev' || (github.event.schedule == '37 1 * * *' && 'test' || 'prod')) }}
           WHAT: ${{ github.event_name == 'workflow_dispatch' && inputs.what || (github.event.schedule == '47 3 * * 1' && 'digest' || (github.event.schedule == '19 15 * * *' && 'dev-activity' || 'alerts')) }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'send' }}
-          SCHEDULED: ${{ github.event_name == 'schedule' && 'yes' || 'no' }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && !inputs.timed && inputs.mode || 'send' }}
+          SCHEDULED: ${{ (github.event_name == 'schedule' || inputs.timed) && 'yes' || 'no' }}
         run: |
           flags=""
           case "$MODE" in
@@ -81,7 +90,7 @@ jobs:
           [ "$SCHEDULED" = yes ] && flags="$flags --scheduled"
           python ci/alerts.py --env "$ENV" $flags
       - name: Watchdog, mail the fixers when this scheduled check fails or recovers (28a, ci/watchdog.py)
-        if: always() && github.event_name == 'schedule'
+        if: always() && (github.event_name == 'schedule' || inputs.timed)
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RESULT: ${{ job.status }}
@@ -91,5 +100,6 @@ jobs:
           MAIL_TEAMLEAD: ${{ secrets.MAIL_TEAMLEAD }}
           MAIL_MANAGER: ${{ secrets.MAIL_MANAGER }}
           MAIL_MANAGEMENT: ${{ secrets.MAIL_MANAGEMENT }}
-          ENV: ${{ github.event.schedule == '19 15 * * *' && 'dev' || (github.event.schedule == '37 1 * * *' && 'test' || 'prod') }}
+          TIMED: ${{ inputs.timed && 'yes' || 'no' }}
+          ENV: ${{ inputs.timed && inputs.env || (github.event.schedule == '19 15 * * *' && 'dev' || (github.event.schedule == '37 1 * * *' && 'test' || 'prod')) }}
         run: python3 ci/watchdog.py --workflow alerts --env "$ENV" --result "$RESULT"

@@ -4,6 +4,12 @@ Notable changes to this platform, newest first (same file in both repos). Format
 
 ## Unreleased (dev)
 ### Added
+- VPS timer `lh-tick` (29a, `docs/runbook.md` section 7): GitHub's scheduler skipped most runs on 11-12 Nov (3 of 16
+  producer runs, so most prod stream runs read no events; 4 of 18 prod alert checks, up to 3.5 h late). The portfolio
+  VPS now starts the producer (06:34-20:34 IST) and the prod and test alert checks with workflow_dispatch and
+  `timed=true`, which runs exactly like a scheduled run (run names `stream timer`, `alerts timer <env>`). GitHub's
+  schedules stay as the fallback: the stream gate job skips a late scheduled send when a timer run started in the last
+  125 minutes; alerts send each finding once anyway. The watchdog counts timer runs as scheduled runs.
 - `.gitattributes` (shared): the Gold-layer `.sql` files now count in GitHub's language statistics
   (`linguist-detectable`); SQL is otherwise treated as data and left out of the language bar.
 - HTML mails (28d, `ci/mailer.py`, same file in both repos): every mail the platform sends itself (promotion,
