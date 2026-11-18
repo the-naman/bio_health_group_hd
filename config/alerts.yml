@@ -5,7 +5,7 @@
 # (business notice, config/jobs.yml business_notice). The digest counts them.
 live: {dev: true, test: true, prod: true}      # live since go-live (5.13, 23 Oct 2026); false = scheduled runs quiet
 roles:                                    # who gets the alerts (MAIL_<ROLE> GitHub secrets)
-  test: [developer, teamlead, manager, management]
+  test: [developer]                      # 30a: test alerts to the Developer only (managers get prod alerts)
   prod: [developer, teamlead, manager, management]
 dev_activity_roles: [developer, teamlead] # requirement 10: daily digest of everyone's dev job runs (20:49 IST)
 digest_roles:                             # who gets the weekly digest (Monday 09:17 IST)

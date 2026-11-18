@@ -199,8 +199,8 @@ o = run("--env", "test")
 check("send: one mail", len(SENT) == 1, len(SENT))
 m = SENT[0]
 check(
-    "to = 3 fixers + management, sorted",
-    m["To"] == "d" + AT + "x.test, g" + AT + "x.test, m" + AT + "x.test, t" + AT + "x.test",
+    "to = the Developer only in test (30a, config/alerts.yml roles.test)",
+    m["To"] == "d" + AT + "x.test",
     m["To"],
 )
 check("subject names the kinds", m["Subject"].startswith("[") and "Data alert:" in m["Subject"], m["Subject"])

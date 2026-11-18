@@ -11,10 +11,10 @@ schedule:                                             # test/prod only (dev runs
 paused: false                                         # live since go-live (5.13, 23 Oct 2026); true = pause all
 job_timeout_minutes: 150
 tasks:
-  - {key: bronze, notebook: bronze/01_load_bronze, timeout: 30, retries: 1}
+  - {key: bronze, notebook: bronze/01_load_bronze, timeout: 30, retries: 1, retry_on_timeout: true}   # 30a: retry a timeout too
   - {key: silver, notebook: silver/01_load_silver, after: [bronze], timeout: 45, retries: 1, notify: true}
   - {key: silver_rebuild, notebook: silver/02_rebuild_silver, after: [silver], run_if: AT_LEAST_ONE_FAILED, timeout: 60, retries: 0}
-  - {key: masks, notebook: security/01_apply_masks, after: [silver, silver_rebuild], run_if: AT_LEAST_ONE_SUCCESS, timeout: 15, retries: 1}
+  - {key: masks, notebook: security/01_apply_masks, after: [silver, silver_rebuild], run_if: AT_LEAST_ONE_SUCCESS, timeout: 15, retries: 1, retry_on_timeout: true}
   - {key: gold, notebook: gold/01_load_gold, after: [masks], timeout: 30, retries: 1}
   - {key: group, notebook: gold/02_load_group, after: [gold], companies: [bhg], timeout: 30, retries: 1}
   - {key: bi_views, notebook: bi/01_create_views, after: [group], timeout: 15, retries: 1}
