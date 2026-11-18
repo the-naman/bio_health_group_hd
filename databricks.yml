@@ -35,7 +35,7 @@ targets:
             timeout_seconds: 1800
             max_retries: 1
             min_retry_interval_millis: 300000
-            retry_on_timeout: false
+            retry_on_timeout: true
           - task_key: silver
             notebook_task:
               notebook_path: ./silver/01_load_silver.ipynb
@@ -65,7 +65,7 @@ targets:
             timeout_seconds: 900
             max_retries: 1
             min_retry_interval_millis: 300000
-            retry_on_timeout: false
+            retry_on_timeout: true
             depends_on:
             - task_key: silver
             - task_key: silver_rebuild
@@ -169,7 +169,7 @@ targets:
             timeout_seconds: 1800
             max_retries: 1
             min_retry_interval_millis: 300000
-            retry_on_timeout: false
+            retry_on_timeout: true
           - task_key: silver
             notebook_task:
               notebook_path: ./silver/01_load_silver.ipynb
@@ -199,7 +199,7 @@ targets:
             timeout_seconds: 900
             max_retries: 1
             min_retry_interval_millis: 300000
-            retry_on_timeout: false
+            retry_on_timeout: true
             depends_on:
             - task_key: silver
             - task_key: silver_rebuild
