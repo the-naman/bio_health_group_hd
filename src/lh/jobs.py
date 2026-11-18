@@ -141,6 +141,8 @@ def check(tasks, root=None, cfg=None):
     for t in tasks:
         if "notify" in t and t["notify"] is not True:
             raise ValueError(f"{t['key']}: notify must be true or left out")
+        if "retry_on_timeout" in t and (t["retry_on_timeout"] is not True or not t.get("retries")):
+            raise ValueError(f"{t['key']}: retry_on_timeout must be true (with retries) or left out")
     keys = [t["key"] for t in tasks]
     if len(keys) != len(set(keys)):
         raise ValueError("duplicate task key")
@@ -191,7 +193,9 @@ def build(cfg, code, env, home, run_as_id=None, mail=None, role=None):
             "max_retries": t["retries"],
         }
         if t["retries"]:
-            task.update(min_retry_interval_millis=300000, retry_on_timeout=False)
+            # 30a: a step marked retry_on_timeout in config also gets its one retry after a timeout (a slow start
+            # of the shared compute is the usual cause: masks 18 Nov, bronze 13 Nov, stream bronze 12 and 13 Nov)
+            task.update(min_retry_interval_millis=300000, retry_on_timeout=t.get("retry_on_timeout") is True)
         if t["after"]:
             task["depends_on"] = [{"task_key": d} for d in t["after"]]
         if t.get("run_if"):

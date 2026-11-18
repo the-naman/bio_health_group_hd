@@ -1,4 +1,5 @@
 name: simulator
+run-name: ${{ inputs.timed && 'simulator timer' || 'simulator' }}
 
 on:
   workflow_dispatch:
@@ -9,6 +10,14 @@ on:
         default: dev
         type: choice
         options: [dev, test, prod]
+      timed:
+        type: boolean
+        description: Set only by the VPS timer lh-tick (30a) - writes test and prod like the nightly schedule
+        default: false
+  # 30a: GitHub started this nightly run 4-7.5 h late on 15-18 Nov, so the 03:00/04:00 jobs read an empty landing
+  # folder and the chain re-ran all daily jobs at once in the morning. The VPS timer lh-tick (docs/runbook.md section 7)
+  # now starts it at 00:01 IST with timed=true (run name "simulator timer"). The schedule below stays as the fallback:
+  # a late run writes nothing once the day is written (the state marker), so the chain then has nothing to start.
   # Nightly run for test and prod, live since go-live (5.13, 23 Oct 2026). Jobs read the files at 03:00 (prod), 05:00 (test);
   # if GitHub starts this run after a job already ran, the chain job below starts that job again.
   schedule:                 # GitHub may delay or drop scheduled runs at the top of the hour; times below are UTC.
@@ -26,7 +35,7 @@ jobs:
     steps:
       - id: pick
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.timed }}" = "true" ]; then
             echo 'envs=["test","prod"]' >> "$GITHUB_OUTPUT"
           else
             echo 'envs=["${{ inputs.env }}"]' >> "$GITHUB_OUTPUT"

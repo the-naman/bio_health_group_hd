@@ -4,6 +4,18 @@ Notable changes to this platform, newest first (same file in both repos). Format
 
 ## Unreleased (dev)
 ### Added
+- Nightly simulator on the VPS timer `lh-tick` (30a, `docs/runbook.md` section 7): GitHub started the 00:01 IST
+  simulator 4-7.5 h late on 15-18 Nov, so the 03:00/04:00 daily jobs read an empty landing folder and the chain job then
+  started all four daily jobs at once in the morning (one `masks` step timed out on 18 Nov). `simulator.yml` now takes
+  `timed=true` (run name `simulator timer`) and the timer starts it at 00:01 IST in both repos. GitHub's schedule stays
+  as the fallback; a late run writes nothing once the day is written, so its chain has nothing to start.
+### Changed (30a)
+- `retry_on_timeout` for `bronze`, `masks` and `stream_bronze` (config/jobs.yml, config/stream.yml): these steps
+  retry once after a timeout too, 5 minutes later. 5 of 7 failures in the week to 18 Nov were timeouts with no retry.
+- Velocity alert volume: scheduled and timed producer sends plant the failure burst only at 08:xx and 16:xx IST
+  (config/stream.yml producer.burst_hours_ist), so about 2 velocity alerts a day per environment instead of 8-9; a
+  send by hand always plants it. Test alerts go to the Developer only (config/alerts.yml roles.test).
+- Runbook: the `lh-tick` token has no expiration (it was listed as expiring 16 Jan 2027).
 - VPS timer `lh-tick` (29a, `docs/runbook.md` section 7): GitHub's scheduler skipped most runs on 11-12 Nov (3 of 16
   producer runs, so most prod stream runs read no events; 4 of 18 prod alert checks, up to 3.5 h late). The portfolio
   VPS now starts the producer (06:34-20:34 IST) and the prod and test alert checks with workflow_dispatch and
